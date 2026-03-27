@@ -41,6 +41,11 @@ float setDHWTemperature = 55.0;
 
 Preferences preferences;
 
+unsigned long lastWifiConnected = 0;
+int wifi_reconnects = 0;
+
+uint32_t boot_count = 0;
+
 void IRAM_ATTR handleInterrupt()
 {
     ot.handleInterrupt();
@@ -66,6 +71,9 @@ void handleRoot() {
     doc["fault"] = readFault;
     doc["temp_sensor_mv"] = temp_mv;
     doc["temp_sensor_c"] = temp_c;
+
+    doc["wifi_reconnects"] = wifi_reconnects;
+    doc["boot_count"] = boot_count;
 
     String output;
     serializeJsonPretty(doc, output);
@@ -131,6 +139,12 @@ void handleSetDHWTemperature() {
     }
 }
 
+void configure_wifi() {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    WiFi.setAutoReconnect(true);
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -138,10 +152,7 @@ void setup()
 
     ot.begin(handleInterrupt); // for ESP ot.begin(); without interrupt handler can be used
 
-    // configure wifi
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-    WiFi.setAutoReconnect(true);
+    configure_wifi();
 
     // configure server
     server.on("/", handleRoot);
@@ -160,12 +171,33 @@ void setup()
     setCentralHeatingOn = preferences.getBool("ch_on", setCentralHeatingOn);
     setBoilerTemperature = preferences.getFloat("req_ch_temp", setBoilerTemperature);
     setDHWTemperature = preferences.getFloat("req_dhw_temp", setDHWTemperature);
+    boot_count = preferences.getUInt("boot_count", boot_count);
+    boot_count++;
+    preferences.end();
+
+    // save updated boot count
+    preferences.begin("opentherm", RW_MODE);
+    preferences.putUInt("boot_count", boot_count);
     preferences.end();
 
 }
 
 void loop()
 {
+    // check wifi connection and reconnect if needed
+    if (WiFi.status() != WL_CONNECTED) {
+        unsigned long now = millis();
+        if (now - lastWifiConnected > 30000) { // try to reconnect every 30 seconds
+            Serial.println("WiFi not connected, trying to reconnect...");
+            WiFi.disconnect(true);
+            configure_wifi();
+            lastWifiConnected = now;
+            wifi_reconnects++;
+        }
+    } else {
+        lastWifiConnected = millis();
+    }
+
     // read temperature sensor
     int sensorValue = 0;
     int n_samples = 20;

@@ -1,3 +1,7 @@
 arduino15
 libraries
-creds.h
+/creds.h
+test/build
+test/doctest.h
+test/ArduinoJson.h
+test/*.tmp

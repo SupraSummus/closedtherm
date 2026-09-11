@@ -36,6 +36,7 @@ float temp_mv = 0.0;
 float temp_c = 0.0;
 
 bool setCentralHeatingOn = true;
+bool setHotWaterOn = true;
 float setBoilerTemperature = 60.0;
 float setDHWTemperature = 55.0;
 
@@ -63,6 +64,7 @@ void handleRoot() {
 
     doc["ch_temp"] = readBoilerTemperature;
     doc["requested_ch_on"] = setCentralHeatingOn;
+    doc["requested_dhw_on"] = setHotWaterOn;
     doc["requested_ch_temp"] = setBoilerTemperature;
     doc["requested_dhw_temp"] = setDHWTemperature;
     doc["pressure"] = readPressure;
@@ -108,7 +110,7 @@ void handleSet() {
         String name = server.argName(i);
         String value = server.arg(name.c_str());
         String error;
-        if (name == "requested_ch_on") {
+        if (name == "requested_ch_on" || name == "requested_dhw_on") {
             if (!(value == "on" || value == "off")) {
                 error = "Invalid " + name + ", expected on or off";
             }
@@ -129,6 +131,10 @@ void handleSet() {
     if (server.hasArg("requested_ch_on")) {
         setCentralHeatingOn = server.arg("requested_ch_on") == "on";
         savePreference("ch_on", setCentralHeatingOn);
+    }
+    if (server.hasArg("requested_dhw_on")) {
+        setHotWaterOn = server.arg("requested_dhw_on") == "on";
+        savePreference("dhw_on", setHotWaterOn);
     }
     if (server.hasArg("requested_ch_temp")) {
         setBoilerTemperature = server.arg("requested_ch_temp").toFloat();
@@ -169,6 +175,7 @@ void setup()
     bool ok = preferences.begin("opentherm", RO_MODE);
     Serial.println("Preferences opened: " + String(ok ? "OK" : "Failed"));
     setCentralHeatingOn = preferences.getBool("ch_on", setCentralHeatingOn);
+    setHotWaterOn = preferences.getBool("dhw_on", setHotWaterOn);
     setBoilerTemperature = preferences.getFloat("req_ch_temp", setBoilerTemperature);
     setDHWTemperature = preferences.getFloat("req_dhw_temp", setDHWTemperature);
     boot_count = preferences.getUInt("boot_count", boot_count);
@@ -211,9 +218,7 @@ void loop()
     server.handleClient();
 
     // Set/Get Boiler Status
-    bool enableCentralHeating = setCentralHeatingOn;
-    bool enableHotWater = true;
-    unsigned long response = ot.setBoilerStatus(enableCentralHeating, enableHotWater, false, false, false);
+    unsigned long response = ot.setBoilerStatus(setCentralHeatingOn, setHotWaterOn, false, false, false);
     responseStatus = ot.getLastResponseStatus();
     readCentralHeatingOn = ot.isCentralHeatingActive(response);
     readHotWaterOn = ot.isHotWaterActive(response);

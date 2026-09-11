@@ -43,11 +43,13 @@ TEST_CASE("setpoints and boot count survive a reboot") {
     preferences.floats["req_ch_temp"] = 41;
     preferences.floats["req_dhw_temp"] = 42;
     preferences.bools["ch_on"] = false;
+    preferences.bools["dhw_on"] = false;
     preferences.uints["boot_count"] = 7;
     setup();
     CHECK(setBoilerTemperature == 41);
     CHECK(setDHWTemperature == 42);
     CHECK_FALSE(setCentralHeatingOn);
+    CHECK_FALSE(setHotWaterOn);
     CHECK(boot_count == 8);
     CHECK(preferences.uints["boot_count"] == 8);
 }
@@ -61,21 +63,39 @@ TEST_CASE("/set saves a setpoint under the key setup() reads and answers with th
     CHECK(parsed(response)["requested_ch_temp"].as<float>() == 45);  // same key /set takes and / reports
 }
 
-TEST_CASE("/set takes several settings at once, central heating both ways") {
+TEST_CASE("/set takes several settings at once, switches both ways") {
     Booted b;
     CHECK(server.get("/set", {{"requested_ch_on", "off"},
+                              {"requested_dhw_on", "off"},
                               {"requested_ch_temp", "48"},
                               {"requested_dhw_temp", "52"}}).code == 200);
     CHECK_FALSE(setCentralHeatingOn);
+    CHECK_FALSE(setHotWaterOn);
     CHECK(setBoilerTemperature == 48);
     CHECK(setDHWTemperature == 52);
     CHECK_FALSE(preferences.bools.at("ch_on"));
+    CHECK_FALSE(preferences.bools.at("dhw_on"));
     CHECK(preferences.floats.at("req_ch_temp") == 48);
     CHECK(preferences.floats.at("req_dhw_temp") == 52);
 
-    CHECK(server.get("/set", {{"requested_ch_on", "on"}}).code == 200);
+    CHECK(server.get("/set", {{"requested_ch_on", "on"}, {"requested_dhw_on", "on"}}).code == 200);
     CHECK(setCentralHeatingOn);
+    CHECK(setHotWaterOn);
     CHECK(preferences.bools.at("ch_on"));
+    CHECK(preferences.bools.at("dhw_on"));
+}
+
+TEST_CASE("loop() asks the boiler for the switch settings it was given") {
+    Booted b;
+    server.get("/set", {{"requested_ch_on", "on"}, {"requested_dhw_on", "off"}});
+    tick(true, 1000);
+    CHECK(ot.asked_central_heating);
+    CHECK_FALSE(ot.asked_hot_water);
+
+    server.get("/set", {{"requested_ch_on", "off"}, {"requested_dhw_on", "on"}});
+    tick(true, 2000);
+    CHECK_FALSE(ot.asked_central_heating);
+    CHECK(ot.asked_hot_water);
 }
 
 TEST_CASE("/set rejects a bad value and changes nothing") {

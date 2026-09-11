@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <math.h>
 #include <OpenTherm.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -47,6 +48,12 @@ bool setCentralHeatingOn = true;
 bool setHotWaterOn = true;
 float setBoilerTemperature = 60.0;
 float setDHWTemperature = 55.0;
+
+// state of pushSetpoints(); NAN means nothing was sent yet, so the first pass pushes
+const unsigned long setpointInterval = 10000; // 10 s between refreshes
+unsigned long lastSetpointSent = 0;
+float sentBoilerTemperature = NAN;
+float sentDHWTemperature = NAN;
 
 Preferences preferences;
 
@@ -213,6 +220,27 @@ void setup()
 
 }
 
+// Sends both setpoints to the boiler every setpointInterval, or right away
+// when one of them changes. Called on every loop() pass.
+void pushSetpoints() {
+    bool unchanged = setBoilerTemperature == sentBoilerTemperature &&
+                     setDHWTemperature == sentDHWTemperature;
+    if (unchanged && millis() - lastSetpointSent < setpointInterval) {
+        return;
+    }
+    sentBoilerTemperature = setBoilerTemperature;
+    sentDHWTemperature = setDHWTemperature;
+    lastSetpointSent = millis();
+
+    bool ok = ot.setBoilerTemperature(setBoilerTemperature);
+    Serial.println("Set Boiler Temperature: " + String(ok ? "OK" : "Failed"));
+    server.handleClient();
+
+    ok = ot.setDHWSetpoint(setDHWTemperature);
+    Serial.println("Set DHW Temperature: " + String(ok ? "OK" : "Failed"));
+    server.handleClient();
+}
+
 void loop()
 {
     // check wifi connection and reconnect if needed
@@ -244,14 +272,7 @@ void loop()
     response_ts = millis();
     server.handleClient();
 
-    // Set Boiler Temperature
-    bool ok = ot.setBoilerTemperature(setBoilerTemperature);
-    Serial.println("Set Boiler Temperature: " + String(ok ? "OK" : "Failed"));
-    server.handleClient();
-
-    ok = ot.setDHWSetpoint(setDHWTemperature);
-    Serial.println("Set DHW Temperature: " + String(ok ? "OK" : "Failed"));
-    server.handleClient();
+    pushSetpoints();
 
     // Get Boiler Temperature
     readBoilerTemperature = ot.getBoilerTemperature();

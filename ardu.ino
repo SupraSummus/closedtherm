@@ -35,6 +35,14 @@ unsigned char readFault = 0;
 float temp_mv = 0.0;
 float temp_c = 0.0;
 
+// The sensor is noisy, so loop() feeds one reading per iteration into this ring
+// buffer and reports the average of it — a window of the last tempSamples
+// iterations, each as long as the OpenTherm exchanges below take.
+const int tempSamples = 20;
+float temp_samples[tempSamples];
+int temp_samples_next = 0;  // slot the next reading goes into
+int temp_samples_held = 0;  // slots filled so far, until the buffer wraps
+
 bool setCentralHeatingOn = true;
 bool setHotWaterOn = true;
 float setBoilerTemperature = 60.0;
@@ -46,6 +54,22 @@ unsigned long lastWifiConnected = 0;
 int wifi_reconnects = 0;
 
 uint32_t boot_count = 0;
+
+// Samples the sensor into the buffer and returns the average of the window.
+// Until the buffer fills it averages just the readings taken so far, so the
+// first values after a boot are not dragged towards zero by the empty slots.
+float sampleTempMillivolts() {
+    temp_samples[temp_samples_next] = analogReadMilliVolts(tempSensorPin);
+    temp_samples_next = (temp_samples_next + 1) % tempSamples;
+    if (temp_samples_held < tempSamples) {
+        temp_samples_held++;
+    }
+    float sum = 0.0;
+    for (int i = 0; i < temp_samples_held; i++) {
+        sum += temp_samples[i];
+    }
+    return sum / temp_samples_held;
+}
 
 void IRAM_ATTR handleInterrupt()
 {
@@ -206,13 +230,7 @@ void loop()
     }
 
     // read temperature sensor
-    int sensorValue = 0;
-    int n_samples = 20;
-    for (int i = 0; i < n_samples; i++) {
-        sensorValue += analogReadMilliVolts(tempSensorPin);
-        delay(1);
-    }
-    temp_mv = 1.0 * sensorValue / n_samples;
+    temp_mv = sampleTempMillivolts();
     temp_c = 18.0 - (temp_mv - 671.0) / 2.0;
     Serial.println("Temperature sensor value: " + String(temp_mv) + " mV, " + String(temp_c) + " C");
     server.handleClient();

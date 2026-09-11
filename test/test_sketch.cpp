@@ -16,6 +16,8 @@ struct Booted {
         boot_count = 0;
         wifi_reconnects = 0;
         lastWifiConnected = 0;
+        temp_samples_next = temp_samples_held = 0;
+        fake::adc_mv = 671;
         setup();
         WiFi.begins = WiFi.disconnects = 0;  // setup() connected once; count kicks from here
     }
@@ -155,6 +157,31 @@ TEST_CASE("coming back online restarts the reconnect countdown and keeps the cou
     tick(false, 65001);
     CHECK(WiFi.begins == 2);
     CHECK(wifi_reconnects == 2);
+}
+
+TEST_CASE("temperature is averaged over the readings taken so far, one per loop") {
+    Booted b;
+    fake::adc_mv = 701;
+    tick(true, 1000);
+    JsonDocument doc = status();
+    CHECK(doc["temp_sensor_mv"].as<float>() == 701);  // the one reading taken, not it over a full window
+    CHECK(doc["temp_sensor_c"].as<float>() == 3);     // degrees follow the average
+    fake::adc_mv = 601;
+    tick(true, 2000);
+    CHECK(status()["temp_sensor_mv"].as<float>() == 651);  // averaged with the first, which still counts
+}
+
+TEST_CASE("a reading falls out of the average once the window has moved past it") {
+    Booted b;
+    fake::adc_mv = 700;
+    tick(true, 1000);  // one reading...
+    fake::adc_mv = 600;
+    for (int i = 1; i < tempSamples; i++) {  // ...then the rest of the window behind it
+        tick(true, 1000 + i);
+    }
+    CHECK(status()["temp_sensor_mv"].as<float>() == 605);  // the 700 still weighs on the average
+    tick(true, 2000);
+    CHECK(status()["temp_sensor_mv"].as<float>() == 600);  // the newest reading has overwritten it
 }
 
 TEST_CASE("/ reports state as JSON") {

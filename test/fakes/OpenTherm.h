@@ -18,8 +18,8 @@ public:
     bool isCentralHeatingActive(unsigned long) { return false; }
     bool isHotWaterActive(unsigned long) { return false; }
     bool isFlameOn(unsigned long) { return false; }
-    bool setBoilerTemperature(float) { return false; }
-    bool setDHWSetpoint(float) { return false; }
+    bool setBoilerTemperature(float t) { ch_setpoints++; last_ch_setpoint = t; return false; }
+    bool setDHWSetpoint(float t) { dhw_setpoints++; last_dhw_setpoint = t; return false; }
     float getBoilerTemperature() { return 0; }
     float getPressure() { return 0; }
     float getReturnTemperature() { return 0; }
@@ -31,4 +31,10 @@ public:
     // Test side: what the last exchange asked the boiler for.
     bool asked_central_heating = false;
     bool asked_hot_water = false;
+
+    // Setpoint writes the test can count.
+    int ch_setpoints = 0;
+    int dhw_setpoints = 0;
+    float last_ch_setpoint = 0;
+    float last_dhw_setpoint = 0;
 };

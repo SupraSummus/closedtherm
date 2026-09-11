@@ -43,7 +43,7 @@ bash test.sh      # g++ and make; first run downloads doctest and ArduinoJson (p
 The sketch is tested as is, on the host.
 `test/test_sketch.cpp` includes `ardu.ino` and compiles it against `test/fakes/`, which stand in for the Arduino core, WebServer, Preferences, WiFi and OpenTherm; ArduinoJson is the real library.
 Tests then drive it the way the ESP32 would: `setup()`, `loop()` with a controlled clock, HTTP handlers through the recorded routes.
-They check status codes, NVS keys, reconnect behaviour and the `/` JSON, not the real network stack.
+They check status codes, NVS keys, reconnect behaviour, setpoint refresh timing and the `/` JSON, not the real network stack.
 
 Add tests as `TEST_CASE`s in `test_sketch.cpp`; the Makefile also picks up any new `test/test_*.cpp`.
 

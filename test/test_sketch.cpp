@@ -18,6 +18,9 @@ struct Booted {
         lastWifiConnected = 0;
         temp_samples_next = temp_samples_held = 0;
         fake::adc_mv = 671;
+        lastSetpointSent = 0;
+        sentBoilerTemperature = sentDHWTemperature = NAN;
+        ot.ch_setpoints = ot.dhw_setpoints = 0;
         setup();
         WiFi.begins = WiFi.disconnects = 0;  // setup() connected once; count kicks from here
     }
@@ -182,6 +185,34 @@ TEST_CASE("a reading falls out of the average once the window has moved past it"
     CHECK(status()["temp_sensor_mv"].as<float>() == 605);  // the 700 still weighs on the average
     tick(true, 2000);
     CHECK(status()["temp_sensor_mv"].as<float>() == 600);  // the newest reading has overwritten it
+}
+
+TEST_CASE("pushSetpoints() writes to the boiler every 10 s, not on every loop() pass") {
+    Booted b;
+    setBoilerTemperature = 60;
+    setDHWTemperature = 55;
+
+    tick(true, 1000);  // first pass after boot: push what we have
+    CHECK(ot.ch_setpoints == 1);
+    CHECK(ot.dhw_setpoints == 1);
+    CHECK(ot.last_ch_setpoint == 60);
+    CHECK(ot.last_dhw_setpoint == 55);
+
+    tick(true, 5000);   // <10 s since the write: nothing to resend
+    tick(true, 10999);
+    CHECK(ot.ch_setpoints == 1);
+
+    tick(true, 11001);  // 10 s elapsed: refresh the boiler
+    CHECK(ot.ch_setpoints == 2);
+    CHECK(ot.dhw_setpoints == 2);
+
+    // A new setpoint does not wait for the interval to run out.
+    CHECK(server.get("/set", {{"requested_ch_temp", "47"}}).code == 200);
+    tick(true, 12000);
+    CHECK(ot.ch_setpoints == 3);
+    CHECK(ot.last_ch_setpoint == 47);
+    tick(true, 13000);  // and the interval restarts from that write
+    CHECK(ot.ch_setpoints == 3);
 }
 
 TEST_CASE("/ reports state as JSON") {

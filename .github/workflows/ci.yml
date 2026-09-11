@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -C test test
+
+  compile-sketch:
+    name: Compile sketch (esp32)
+    runs-on: ubuntu-latest
+    steps:
+      # arduino-cli requires the sketch folder to be named like the .ino file.
+      - uses: actions/checkout@v4
+        with:
+          path: ardu
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      - name: Cache esp32 core and libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ardu/arduino15
+            ardu/libraries
+          key: arduino-${{ runner.os }}-${{ hashFiles('ardu/install.sh', 'ardu/arduino-cli.yaml') }}
+
+      - name: Install core and libraries
+        working-directory: ardu
+        run: bash install.sh
+
+      - name: Provide dummy WiFi credentials
+        working-directory: ardu
+        run: |
+          printf 'const char* ssid = "ci";\nconst char* password = "ci";\n' > creds.h
+
+      - name: Compile
+        working-directory: ardu
+        run: arduino-cli --config-file arduino-cli.yaml compile -b esp32:esp32:esp32 --warnings default .

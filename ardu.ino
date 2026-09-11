@@ -104,7 +104,7 @@ void handleSetCentralHeating() {
 void handleSetBoilerTemperature() {
     if (server.hasArg("temperature")) {
         float temp = server.arg("temperature").toFloat();
-        if (setBoilerTemperature > 0.0 && setBoilerTemperature < 100.0) {
+        if (temp > 0.0 && temp < 100.0) {
             setBoilerTemperature = temp;
             bool ok = preferences.begin("opentherm", RW_MODE);
             Serial.println("Preferences opened for writing: " + String(ok ? "OK" : "Failed"));
@@ -123,7 +123,7 @@ void handleSetBoilerTemperature() {
 void handleSetDHWTemperature() {
     if (server.hasArg("temperature")) {
         float temp = server.arg("temperature").toFloat();
-        if (setDHWTemperature > 0.0 && setDHWTemperature < 100.0) {
+        if (temp > 0.0 && temp < 100.0) {
             setDHWTemperature = temp;
             bool ok = preferences.begin("opentherm", RW_MODE);
             Serial.println("Preferences opened for writing: " + String(ok ? "OK" : "Failed"));

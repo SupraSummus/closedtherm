@@ -28,17 +28,13 @@ void tick(bool online, uint32_t ms) {
     loop();
 }
 
-JsonDocument status() {
+JsonDocument parsed(const WebServer::Response& response) {
     JsonDocument doc;
-    REQUIRE(deserializeJson(doc, server.get("/").body) == DeserializationError::Ok);
+    REQUIRE(deserializeJson(doc, response.body) == DeserializationError::Ok);
     return doc;
 }
 
-struct Endpoint { const char* path; const char* nvs_key; float* setpoint; };
-const Endpoint temperature_endpoints[] = {
-    {"/set_boiler_temperature", "req_ch_temp", &setBoilerTemperature},
-    {"/set_dhw_temperature", "req_dhw_temp", &setDHWTemperature},
-};
+JsonDocument status() { return parsed(server.get("/")); }
 
 }  // namespace
 
@@ -56,38 +52,61 @@ TEST_CASE("setpoints and boot count survive a reboot") {
     CHECK(preferences.uints["boot_count"] == 8);
 }
 
-TEST_CASE("temperature endpoints apply a valid value and persist it under the key setup() reads") {
+TEST_CASE("/set saves a setpoint under the key setup() reads and answers with the new state") {
     Booted b;
-    for (const Endpoint& e : temperature_endpoints) {
-        CAPTURE(e.path);
-        CHECK(server.get(e.path, {{"temperature", "45"}}).code == 200);
-        CHECK(*e.setpoint == 45);
-        CHECK(preferences.floats.at(e.nvs_key) == 45);
-    }
+    WebServer::Response response = server.get("/set", {{"requested_ch_temp", "45"}});
+    CHECK(response.code == 200);
+    CHECK(setBoilerTemperature == 45);
+    CHECK(preferences.floats.at("req_ch_temp") == 45);
+    CHECK(parsed(response)["requested_ch_temp"].as<float>() == 45);  // same key /set takes and / reports
 }
 
-TEST_CASE("temperature endpoints reject bad values and leave the setpoint alone") {
+TEST_CASE("/set takes several settings at once, central heating both ways") {
     Booted b;
-    for (const Endpoint& e : temperature_endpoints) {
-        *e.setpoint = 55;
-        for (const char* bad : {"0", "100", "-5", "500", "nan", "inf", "abc", ""}) {
-            CAPTURE(e.path);
-            CAPTURE(bad);
-            CHECK(server.get(e.path, {{"temperature", bad}}).code == 400);
-            CHECK(*e.setpoint == 55);
-        }
-        CHECK(server.get(e.path).code == 400);  // missing parameter
-        CHECK(preferences.floats.count(e.nvs_key) == 0);
-    }
-}
-
-TEST_CASE("/set_central_heating") {
-    Booted b;
-    CHECK(server.get("/set_central_heating", {{"state", "off"}}).code == 200);
+    CHECK(server.get("/set", {{"requested_ch_on", "off"},
+                              {"requested_ch_temp", "48"},
+                              {"requested_dhw_temp", "52"}}).code == 200);
     CHECK_FALSE(setCentralHeatingOn);
+    CHECK(setBoilerTemperature == 48);
+    CHECK(setDHWTemperature == 52);
     CHECK_FALSE(preferences.bools.at("ch_on"));
-    CHECK(server.get("/set_central_heating", {{"state", "maybe"}}).code == 400);
-    CHECK_FALSE(setCentralHeatingOn);
+    CHECK(preferences.floats.at("req_ch_temp") == 48);
+    CHECK(preferences.floats.at("req_dhw_temp") == 52);
+
+    CHECK(server.get("/set", {{"requested_ch_on", "on"}}).code == 200);
+    CHECK(setCentralHeatingOn);
+    CHECK(preferences.bools.at("ch_on"));
+}
+
+TEST_CASE("/set rejects a bad value and changes nothing") {
+    Booted b;
+    setCentralHeatingOn = true;
+    setBoilerTemperature = 60;
+    setDHWTemperature = 55;
+    for (const char* bad : {"0", "100", "-5", "500", "nan", "inf", "abc", ""}) {
+        CAPTURE(bad);
+        CHECK(server.get("/set", {{"requested_ch_temp", bad}}).code == 400);
+    }
+    CHECK(server.get("/set", {{"requested_ch_on", "maybe"}}).code == 400);
+    // A good parameter alongside a bad one is not applied either.
+    CHECK(server.get("/set", {{"requested_ch_on", "off"},
+                              {"requested_ch_temp", "48"},
+                              {"requested_dhw_temp", "999"}}).code == 400);
+    CHECK(setCentralHeatingOn);
+    CHECK(setBoilerTemperature == 60);
+    CHECK(setDHWTemperature == 55);
+    CHECK(preferences.floats.empty());
+    CHECK(preferences.bools.empty());
+}
+
+TEST_CASE("/set rejects a request it cannot act on instead of silently doing nothing") {
+    Booted b;
+    setBoilerTemperature = 60;
+    CHECK(server.get("/set").code == 400);                             // no parameters
+    CHECK(server.get("/set", {{"ch_temp", "45"}}).code == 400);        // reading's name, not the setpoint's
+    CHECK(server.get("/set", {{"requested_dwh_temp", "45"}}).code == 400);  // typo
+    CHECK(setBoilerTemperature == 60);
+    CHECK(preferences.floats.empty());
 }
 
 TEST_CASE("loop() forces a WiFi reconnect after 30 s offline, and again every 30 s") {
@@ -120,7 +139,7 @@ TEST_CASE("coming back online restarts the reconnect countdown and keeps the cou
 
 TEST_CASE("/ reports state as JSON") {
     Booted b;
-    server.get("/set_boiler_temperature", {{"temperature", "61"}});
+    server.get("/set", {{"requested_ch_temp", "61"}});
     JsonDocument doc = status();
     CHECK(server.sent.type == "application/json");
     CHECK(doc["requested_ch_temp"].as<float>() == 61);

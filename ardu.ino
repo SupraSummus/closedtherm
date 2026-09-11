@@ -62,6 +62,7 @@ void handleRoot() {
     doc["response_ts"] = response_ts;
 
     doc["ch_temp"] = readBoilerTemperature;
+    doc["requested_ch_on"] = setCentralHeatingOn;
     doc["requested_ch_temp"] = setBoilerTemperature;
     doc["requested_dhw_temp"] = setDHWTemperature;
     doc["pressure"] = readPressure;
@@ -81,62 +82,63 @@ void handleRoot() {
     server.send(200, "application/json", output);
 }
 
-void handleSetCentralHeating() {
-    if (server.hasArg("state")) {
-        String state = server.arg("state");
-        if (state == "on") {
-            setCentralHeatingOn = true;
-        } else if (state == "off") {
-            setCentralHeatingOn = false;
+// Saves one setting, opening and closing NVS around the write.
+void savePreference(const char* key, bool value) {
+    preferences.begin("opentherm", RW_MODE);
+    preferences.putBool(key, value);
+    preferences.end();
+}
+
+void savePreference(const char* key, float value) {
+    preferences.begin("opentherm", RW_MODE);
+    preferences.putFloat(key, value);
+    preferences.end();
+}
+
+// /set?requested_ch_on=on&requested_ch_temp=60 — parameters are optional, but
+// at least one is required, and they are named after the keys / reports them
+// under. The whole request is checked before anything is applied, so it either
+// takes effect in full or not at all. Answers like /.
+void handleSet() {
+    if (server.args() == 0) {
+        server.send(400, "text/plain", "No parameters given");
+        return;
+    }
+    for (int i = 0; i < server.args(); i++) {
+        String name = server.argName(i);
+        String value = server.arg(name.c_str());
+        String error;
+        if (name == "requested_ch_on") {
+            if (!(value == "on" || value == "off")) {
+                error = "Invalid " + name + ", expected on or off";
+            }
+        } else if (name == "requested_ch_temp" || name == "requested_dhw_temp") {
+            float temp = value.toFloat();
+            if (!(temp > 0.0 && temp < 100.0)) {  // both comparisons also reject nan and inf
+                error = "Invalid " + name + ", expected 0 < t < 100";
+            }
         } else {
-            server.send(400, "text/plain", "Invalid state value");
+            error = "Unknown parameter " + name;
+        }
+        if (error.length() > 0) {
+            server.send(400, "text/plain", error);
             return;
         }
-        preferences.begin("opentherm", RW_MODE);
-        preferences.putBool("ch_on", setCentralHeatingOn);
-        preferences.end();
-        server.send(200, "text/plain", "Central heating turned " + state);
-    } else {
-        server.send(400, "text/plain", "Missing 'state' parameter");
     }
-}
 
-void handleSetBoilerTemperature() {
-    if (server.hasArg("temperature")) {
-        float temp = server.arg("temperature").toFloat();
-        if (temp > 0.0 && temp < 100.0) {
-            setBoilerTemperature = temp;
-            bool ok = preferences.begin("opentherm", RW_MODE);
-            Serial.println("Preferences opened for writing: " + String(ok ? "OK" : "Failed"));
-            int result = preferences.putFloat("req_ch_temp", setBoilerTemperature);
-            Serial.println("Preferences write result: " + String(result));
-            preferences.end();
-            server.send(200, "text/plain", "Boiler temperature set to " + String(setBoilerTemperature));
-        } else {
-            server.send(400, "text/plain", "Invalid temperature value");
-        }
-    } else {
-        server.send(400, "text/plain", "Missing 'temperature' parameter");
+    if (server.hasArg("requested_ch_on")) {
+        setCentralHeatingOn = server.arg("requested_ch_on") == "on";
+        savePreference("ch_on", setCentralHeatingOn);
     }
-}
-
-void handleSetDHWTemperature() {
-    if (server.hasArg("temperature")) {
-        float temp = server.arg("temperature").toFloat();
-        if (temp > 0.0 && temp < 100.0) {
-            setDHWTemperature = temp;
-            bool ok = preferences.begin("opentherm", RW_MODE);
-            Serial.println("Preferences opened for writing: " + String(ok ? "OK" : "Failed"));
-            int result = preferences.putFloat("req_dhw_temp", setDHWTemperature);
-            Serial.println("Preferences write result: " + String(result));
-            preferences.end();
-            server.send(200, "text/plain", "DHW temperature set to " + String(setDHWTemperature));
-        } else {
-            server.send(400, "text/plain", "Invalid temperature value");
-        }
-    } else {
-        server.send(400, "text/plain", "Missing 'temperature' parameter");
+    if (server.hasArg("requested_ch_temp")) {
+        setBoilerTemperature = server.arg("requested_ch_temp").toFloat();
+        savePreference("req_ch_temp", setBoilerTemperature);
     }
+    if (server.hasArg("requested_dhw_temp")) {
+        setDHWTemperature = server.arg("requested_dhw_temp").toFloat();
+        savePreference("req_dhw_temp", setDHWTemperature);
+    }
+    handleRoot();
 }
 
 void configure_wifi() {
@@ -156,9 +158,7 @@ void setup()
 
     // configure server
     server.on("/", handleRoot);
-    server.on("/set_central_heating", handleSetCentralHeating);
-    server.on("/set_boiler_temperature", handleSetBoilerTemperature);
-    server.on("/set_dhw_temperature", handleSetDHWTemperature);
+    server.on("/set", handleSet);
     server.begin();
 
     // temperature sensor

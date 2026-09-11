@@ -22,6 +22,7 @@ Each parameter is named after the key it appears under in that JSON.
 | parameter | values |
 | --- | --- |
 | `requested_ch_on` | `on` or `off` |
+| `requested_dhw_on` | `on` or `off` |
 | `requested_ch_temp` | CH setpoint in degrees C, `0 < t < 100` |
 | `requested_dhw_temp` | hot water setpoint in degrees C, `0 < t < 100` |
 

@@ -1,6 +1,7 @@
 // Records routes, serves query args from a map, captures the last response.
 #pragma once
 #include <functional>
+#include <iterator>
 #include <map>
 #include <string>
 #include "Arduino.h"
@@ -12,21 +13,27 @@ public:
     void begin() {}
     void handleClient() {}
 
-    bool hasArg(const char* name) const { return args.count(name) > 0; }
+    bool hasArg(const char* name) const { return query.count(name) > 0; }
     String arg(const char* name) const {
-        auto it = args.find(name);
-        return it == args.end() ? String() : String(it->second.c_str());
+        auto it = query.find(name);
+        return it == query.end() ? String() : String(it->second.c_str());
+    }
+    int args() const { return static_cast<int>(query.size()); }
+    String argName(int i) const {
+        auto it = query.begin();
+        std::advance(it, i);
+        return String(it->first.c_str());
     }
     void send(int code, const char* type, const String& body) { sent = {code, type, body.c_str()}; }
 
     // Test side.
     struct Response { int code = 0; std::string type, body; };
     std::map<std::string, std::function<void()>> routes;
-    std::map<std::string, std::string> args;
+    std::map<std::string, std::string> query;
     Response sent;
 
-    Response get(const char* path, std::map<std::string, std::string> query = {}) {
-        args = query;
+    Response get(const char* path, std::map<std::string, std::string> args = {}) {
+        query = args;
         sent = {};
         routes.at(path)();
         return sent;

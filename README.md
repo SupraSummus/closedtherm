@@ -12,6 +12,27 @@ bash monitor.sh   # serial monitor
 
 `creds.h` (gitignored) must define `ssid` and `password`.
 
+## HTTP API
+
+`GET /` reports everything the sketch knows, as JSON.
+
+`GET /set` changes settings, which are kept in NVS across reboots, and answers with the same JSON.
+Each parameter is named after the key it appears under in that JSON.
+
+| parameter | values |
+| --- | --- |
+| `requested_ch_on` | `on` or `off` |
+| `requested_ch_temp` | CH setpoint in degrees C, `0 < t < 100` |
+| `requested_dhw_temp` | hot water setpoint in degrees C, `0 < t < 100` |
+
+All are optional, at least one is required, and they can be combined:
+
+```sh
+curl 'http://boiler/set?requested_ch_on=on&requested_ch_temp=60&requested_dhw_temp=55'
+```
+
+An unknown parameter or a bad value is a `400` that changes nothing, so a request either applies in full or not at all.
+
 ## Tests
 
 ```sh

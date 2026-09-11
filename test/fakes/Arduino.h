@@ -14,7 +14,6 @@ inline int adc_mv = 671;
 }
 
 inline unsigned long millis() { return fake::millis; }
-inline void delay(unsigned long) {}
 inline void pinMode(int, int) {}
 inline void analogSetPinAttenuation(int, int) {}
 inline int analogReadMilliVolts(int) { return fake::adc_mv; }

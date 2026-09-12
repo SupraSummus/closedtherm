@@ -21,7 +21,7 @@ struct Thermometer {
     // A median over the last `window` readings, one per loop() pass, against
     // errors in the reading: supply and reference noise, which lands as short
     // dips. The window is measured in passes, not seconds.
-    static constexpr int window = 32;
+    static constexpr int window = 16;
     float readings[window];
     int next = 0;  // slot the next reading goes into
     int held = 0;  // slots filled so far, until the buffer wraps
@@ -29,7 +29,7 @@ struct Thermometer {
     // A first-order low-pass over the median, against the room itself moving
     // briefly, which the median has no reason to drop. Its time constant is in
     // seconds off millis(), not in passes.
-    static constexpr float timeConstant = 60.0;
+    static constexpr float timeConstant = 600.0;
     uint32_t lastSample = 0;
 
     // As of the last pass. millivolts and celsius are what the thermometer

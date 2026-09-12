@@ -63,13 +63,13 @@ TEST_CASE("a reading counts for as long as the window holds it, and no longer") 
     CHECK(t.median == 600);  // the 600s are the majority now
 }
 
-TEST_CASE("the low-pass follows a step of the median with a time constant of about a minute") {
+TEST_CASE("the low-pass follows a step of the median with a time constant of about ten minutes") {
     Thermometer t(pin);
     passes(t, Thermometer::window, 700);
     passes(t, Thermometer::window, 600);  // the median is at 600 within the window...
     CHECK(t.median == 600);
-    CHECK(t.millivolts > 690);  // ...the low-pass has barely started
-    passes(t, 600 - Thermometer::window, 600);  // a minute since the step, at 100 ms a pass
+    CHECK(t.millivolts > 699);  // ...the low-pass has barely started
+    passes(t, 6000 - Thermometer::window, 600);  // ten minutes since the step, at 100 ms a pass
     CHECK(t.millivolts == doctest::Approx(700 - 100 * 0.632).epsilon(0.01));  // 1 - 1/e of the way
 }
 

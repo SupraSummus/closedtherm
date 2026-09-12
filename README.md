@@ -83,9 +83,15 @@ Without that deadband the PI output, which drifts a little on every pass, would 
 The room temperature is a transistor junction on an analog pin.
 `thermometer.h` owns it end to end, from setting the pin up through reading it to degrees; `ardu.ino` owns the one instance and says which pin.
 
-The reading is noisy in a way that looks like short one-sided dips, most likely the supply rail sagging under the radio's current bursts.
-Each `loop()` pass takes one reading, and `temp_sensor_mv` and `temp_sensor_c` are the median of the last 64: a dip lands on one pass or none, and the median drops it however long it lasted, where an average would follow it.
-A median of whole millivolts moves in 0.5 mV steps, a quarter of a degree, which is the price of that until a slower filter smooths it.
+Two independent filters sit between the ADC and `temp_sensor_mv` / `temp_sensor_c`, each against a different kind of disturbance.
+
+The median is against errors in the reading itself: the raw value is noisy in a way that looks like short one-sided dips, most likely the supply rail and the ADC reference sagging under the radio's current bursts.
+Each `loop()` pass takes one reading and the median of the last 32 goes on: a dip lands on one pass or none, and the median drops it however long it lasted, where an average would follow it.
+
+The low-pass is against the temperature itself moving briefly: a draught, a door, someone standing next to the sensor.
+Those are real readings the median has no reason to drop, and the controller should not chase them.
+It is first order with a time constant of a minute, integrated over the `millis()` that actually elapsed, so like `pi_ki` it does not depend on how long one `loop()` takes.
+The first reading after a boot seeds it, so it starts at the room rather than climbing there from zero.
 
 ## Tests
 

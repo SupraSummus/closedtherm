@@ -11,9 +11,13 @@ enum { ADC_0db };
 namespace fake {
 inline uint32_t millis = 0;
 inline int adc_mv = 671;
+inline long random_value = 0;
 }
 
 inline unsigned long millis() { return fake::millis; }
+// Tests set what random() hands back, so a jittered interval is still a number
+// they can write an assertion about.
+inline long random(long howbig) { return howbig > 0 ? fake::random_value % howbig : 0; }
 inline void pinMode(int, int) {}
 inline void analogSetPinAttenuation(int, int) {}
 inline int analogReadMilliVolts(int) { return fake::adc_mv; }

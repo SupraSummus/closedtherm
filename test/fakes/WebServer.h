@@ -11,7 +11,15 @@ public:
     explicit WebServer(int = 80) {}
     void on(const char* path, std::function<void()> handler) { routes[path] = handler; }
     void begin() {}
-    void handleClient() {}
+    // Serves the request a test queued, on the handleClient() call it asked for,
+    // so a test can land a /set in the middle of a loop() pass.
+    void handleClient() {
+        if (pending && --pending_in == 0) {
+            auto request = pending;
+            pending = nullptr;
+            request();
+        }
+    }
 
     bool hasArg(const char* name) const { return query.count(name) > 0; }
     String arg(const char* name) const {
@@ -31,6 +39,8 @@ public:
     std::map<std::string, std::function<void()>> routes;
     std::map<std::string, std::string> query;
     Response sent;
+    std::function<void()> pending;
+    int pending_in = 0;  // handleClient() calls until `pending` is served
 
     Response get(const char* path, std::map<std::string, std::string> args = {}) {
         query = args;

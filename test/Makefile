@@ -16,7 +16,7 @@ ARDUINOJSON_URL     := https://github.com/bblanchon/ArduinoJson/releases/downloa
 
 BUILD := build
 SRCS  := main.cpp $(wildcard test_*.cpp)
-DEPS  := doctest.h ArduinoJson.h ../ardu.ino ../pi.h ../pi_source.h $(wildcard fakes/*.h)
+DEPS  := doctest.h ArduinoJson.h ../ardu.ino ../pi.h ../pi_source.h ../thermometer.h $(wildcard fakes/*.h)
 BIN   := $(BUILD)/run_tests
 
 .PHONY: all test clean distclean

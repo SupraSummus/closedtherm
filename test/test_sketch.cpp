@@ -47,8 +47,8 @@ void tick(bool online, uint32_t ms) {
 }
 
 // Points the sensor at a room temperature, in the millivolts loop() converts back,
-// and clears the window so the next tick reports it outright instead of the
-// median of it and the readings before it.
+// and clears the window and the low-pass so the next tick reports it outright
+// instead of easing there from the readings before it.
 void roomTemperature(float celsius) {
     fake::adc_mv = static_cast<int>(Thermometer::toMillivolts(celsius));
     thermometer = Thermometer(tempSensorPin);
@@ -193,7 +193,11 @@ TEST_CASE("loop() takes one thermometer pass off the ADC and / reports it") {
     CHECK(doc["temp_sensor_c"].as<float>() == 3);
     fake::adc_mv = 601;
     tick(true, 2000);
-    CHECK(status()["temp_sensor_mv"].as<float>() == 651);  // the median of the two passes
+    // The median of the two is 651, and / reports the low-pass a second into
+    // following it: neither the raw reading nor the median, and not stuck.
+    float mv = status()["temp_sensor_mv"].as<float>();
+    CHECK(mv < 701);
+    CHECK(mv > 651);
 }
 
 TEST_CASE("pushSetpoints() writes to the boiler every 10 s, not on every loop() pass") {

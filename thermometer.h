@@ -29,7 +29,13 @@ struct Thermometer {
     // A first-order low-pass over the median, against the room itself moving
     // briefly, which the median has no reason to drop. Its time constant is in
     // seconds off millis(), not in passes.
+    //
+    // Until the time since the first pass reaches timeConstant, that time is the
+    // constant instead, which makes the filter the plain mean so far: the first
+    // pass after a boot has been seen a dozen degrees off, and this way it
+    // weighs one pass, not ten minutes.
     static constexpr float timeConstant = 600.0;
+    float tau = 0.0;  // the one in force, in seconds
     uint32_t lastSample = 0;
 
     // As of the last pass. millivolts and celsius are what the thermometer
@@ -56,12 +62,15 @@ struct Thermometer {
         median = medianOfWindow();
 
         if (held == 1) {
-            millivolts = median;  // seeded, so a boot starts at the room and not at zero
+            millivolts = median;  // nothing to average with yet, and not zero
         } else {
-            // dt / (tau + dt) rather than dt / tau: stays put at dt = 0 and
-            // never overshoots, however long the pass took.
+            // dt / (tau + dt) rather than dt / tau: never overshoots, however
+            // long the pass took. At dt = 0 it is 0 / 0 while tau is still 0.
             float dt = (now - lastSample) / 1000.0f;
-            millivolts += (median - millivolts) * dt / (timeConstant + dt);
+            if (dt > 0) {
+                tau = std::min(tau + dt, timeConstant);
+                millivolts += (median - millivolts) * dt / (tau + dt);
+            }
         }
         lastSample = now;
         celsius = toCelsius(millivolts);

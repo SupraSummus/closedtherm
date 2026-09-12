@@ -37,6 +37,16 @@ TEST_CASE("a first pass is reported as it is, at 2 mV per degree, downwards as i
     CHECK(t.celsius == 15);      // 6 mV above the 671 mV of 18 C
 }
 
+TEST_CASE("a first pass that reads off counts for one pass, not for ten minutes") {
+    Thermometer t(pin);
+    passes(t, 1, 696);  // 25 mV high, which is 12 degrees cold: what a boot has been seen to read
+    passes(t, 9, 671);
+    // The mean of the ten medians: 696, 683.5 while it is one reading of two, then 671.
+    // A ten-minute low-pass seeded with it would still be within a millivolt of it.
+    CHECK(t.millivolts == doctest::Approx(674.75));
+    CHECK(t.celsius == doctest::Approx(16.125));  // two degrees off, not twelve
+}
+
 TEST_CASE("the median is over the readings taken so far, until the window fills") {
     CHECK(medianOver({701}) == 701);            // the one reading, not it over a full window
     CHECK(medianOver({701, 601}) == 651);       // an even count: the mean of the middle two
@@ -66,6 +76,7 @@ TEST_CASE("a reading counts for as long as the window holds it, and no longer") 
 TEST_CASE("the low-pass follows a step of the median with a time constant of about ten minutes") {
     Thermometer t(pin);
     passes(t, Thermometer::window, 700);
+    passes(t, 1, 700, 600000);            // ten minutes in: the time constant is at full length
     passes(t, Thermometer::window, 600);  // the median is at 600 within the window...
     CHECK(t.median == 600);
     CHECK(t.millivolts > 699);  // ...the low-pass has barely started
@@ -79,8 +90,8 @@ TEST_CASE("the low-pass takes millis() wrapping past 32 bits as the second it wa
     passes(t, 1, 700, 0);  // seeded a second before the wrap
     fake::millis = 0;
     passes(t, 1, 600, 0);  // the median is 650 now, one second on through zero
-    CHECK(t.millivolts < 700);
-    CHECK(t.millivolts > 690);  // a second of the way, not 49 days of it
+    // A second in, the mean of the two medians; 49 days would have taken it nearly to 650.
+    CHECK(t.millivolts == doctest::Approx(675).epsilon(0.001));
 }
 
 TEST_CASE("the low-pass runs on the clock, not on passes") {

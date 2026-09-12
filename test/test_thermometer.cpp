@@ -40,7 +40,12 @@ TEST_CASE("a first pass is reported as it is, at 2 mV per degree, downwards as i
 TEST_CASE("the median is over the readings taken so far, until the window fills") {
     CHECK(medianOver({701}) == 701);            // the one reading, not it over a full window
     CHECK(medianOver({701, 601}) == 651);       // an even count: the mean of the middle two
+    CHECK(medianOver({701, 600}) == 650.5);     // ...kept to the half millivolt, not rounded
     CHECK(medianOver({701, 601, 611}) == 611);  // an odd count: the middle one
+}
+
+TEST_CASE("a half millivolt converts to a quarter degree") {
+    CHECK(Thermometer::toCelsius(650.5) == 28.25);  // 20.5 mV below the 671 mV of 18 C
 }
 
 TEST_CASE("the median drops dips that an average would follow") {

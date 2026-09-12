@@ -228,6 +228,16 @@ TEST_CASE("pushSetpoints() writes to the boiler every 10 s, not on every loop() 
     CHECK(ot.ch_setpoints == 3);
 }
 
+TEST_CASE("the 10 s refresh carries on across millis() wrapping past 32 bits") {
+    Booted b;
+    tick(true, UINT32_MAX - 5000);
+    CHECK(ot.ch_setpoints == 1);
+    tick(true, 1000);  // 6 s on, through zero: not due yet
+    CHECK(ot.ch_setpoints == 1);
+    tick(true, 5001);  // 10 s on: due, not "written a moment ago" for the next 49 days
+    CHECK(ot.ch_setpoints == 2);
+}
+
 TEST_CASE("a setpoint change smaller than the deadband waits for the next refresh") {
     Booted b;
     setBoilerTemperature = 60;

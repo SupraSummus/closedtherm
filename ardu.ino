@@ -31,7 +31,7 @@ bool readCentralHeatingOn = false;
 bool readHotWaterOn = false;
 bool readFlameOn = false;
 OpenThermResponseStatus responseStatus = OpenThermResponseStatus::NONE;
-unsigned long response_ts = 0;
+uint32_t response_ts = 0;
 float readBoilerTemperature = 0.0;
 float readPressure = 0.0;
 float readReturnTemperature = 0.0;
@@ -67,16 +67,16 @@ ChTempSource setChTempSource = CH_TEMP_MANUAL;
 PISource pi;
 
 // state of pushSetpoints(); NAN means nothing was sent yet, so the first pass pushes
-const unsigned long setpointInterval = 10000; // 10 s between refreshes
+const uint32_t setpointInterval = 10000; // 10 s between refreshes
 const float setpointEpsilon = 0.5;  // smallest change worth an early write, so the
                                     // PI output does not write on every pass
-unsigned long lastSetpointSent = 0;
+uint32_t lastSetpointSent = 0;
 float sentBoilerTemperature = NAN;
 float sentDHWTemperature = NAN;
 
 Preferences preferences;
 
-unsigned long lastWifiConnected = 0;
+uint32_t lastWifiConnected = 0;
 int wifi_reconnects = 0;
 
 uint32_t boot_count = 0;
@@ -337,7 +337,7 @@ void loop()
 {
     // check wifi connection and reconnect if needed
     if (WiFi.status() != WL_CONNECTED) {
-        unsigned long now = millis();
+        uint32_t now = millis();
         if (now - lastWifiConnected > 30000) { // try to reconnect every 30 seconds
             Serial.println("WiFi not connected, trying to reconnect...");
             WiFi.disconnect(true);

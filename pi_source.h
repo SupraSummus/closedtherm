@@ -54,8 +54,8 @@ const int piSettingCount = sizeof(piSettings) / sizeof(piSettings[0]);
 // another write to be worth it. The wait is jittered by up to the third, so the
 // writes do not fall on a rigid grid.
 const float piIntegralSaveEpsilon = 1.0;
-const unsigned long piIntegralSaveInterval = 600000;  // 10 minutes
-const unsigned long piIntegralSaveJitter = 120000;    // give or take 2
+const uint32_t piIntegralSaveInterval = 600000;  // 10 minutes
+const uint32_t piIntegralSaveJitter = 120000;    // give or take 2
 
 struct PISource {
     PIController control;
@@ -66,15 +66,15 @@ struct PISource {
     // What the integral was when it last went to NVS, and how long to wait before
     // it is worth writing again.
     float savedIntegral = control.integral;
-    unsigned long lastIntegralSave = 0;
-    unsigned long integralSaveWait = piIntegralSaveInterval;
+    uint32_t lastIntegralSave = 0;
+    uint32_t integralSaveWait = piIntegralSaveInterval;
 
     // The CH setpoint this source asks for.
     float setpoint() const {
         return control.output;
     }
 
-    void start(unsigned long now) {
+    void start(uint32_t now) {
         control.start(now);
         lastIntegralSave = now;
         jitterIntegralSave();
@@ -93,7 +93,7 @@ struct PISource {
     // write forever, and without the clock one a working one would write on every
     // pass. Out of charge nothing is written at all, since the integral is then
     // only mirroring the setpoint that is in charge, which is not worth keeping.
-    bool integralDueToSave(unsigned long now) {
+    bool integralDueToSave(uint32_t now) {
         if (!inCharge || now - lastIntegralSave < integralSaveWait ||
             fabs(control.integral - savedIntegral) < piIntegralSaveEpsilon) {
             return false;
@@ -132,7 +132,7 @@ struct PISource {
     // has to decide: it is in charge only when the switch above says so, and the
     // boiler can only answer the error while it is allowed to heat. `driven` is
     // the setpoint in charge instead, and goes unread unless this source is out.
-    void update(bool nowInCharge, bool canHeat, float measured, float driven, unsigned long now) {
+    void update(bool nowInCharge, bool canHeat, float measured, float driven, uint32_t now) {
         inCharge = nowInCharge;
         if (!inCharge) {
             control.track(measured, driven, now);

@@ -16,7 +16,7 @@ inline std::deque<int> adc_readings;  // what it reads first, in this order
 inline long random_value = 0;
 }
 
-inline unsigned long millis() { return fake::millis; }
+inline uint32_t millis() { return fake::millis; }
 // Tests set what random() hands back, so a jittered interval is still a number
 // they can write an assertion about.
 inline long random(long howbig) { return howbig > 0 ? fake::random_value % howbig : 0; }

@@ -86,11 +86,11 @@ The room temperature is a transistor junction on an analog pin.
 Two independent filters sit between the ADC and `temp_sensor_mv` / `temp_sensor_c`, each against a different kind of disturbance.
 
 The median is against errors in the reading itself: the raw value is noisy in a way that looks like short one-sided dips, most likely the supply rail and the ADC reference sagging under the radio's current bursts.
-Each `loop()` pass takes one reading and the median of the last 32 goes on: a dip lands on one pass or none, and the median drops it however long it lasted, where an average would follow it.
+Each `loop()` pass takes one reading and the median of the last 16 goes on: a dip lands on one pass or none, and the median drops it however long it lasted, where an average would follow it.
 
 The low-pass is against the temperature itself moving briefly: a draught, a door, someone standing next to the sensor.
 Those are real readings the median has no reason to drop, and the controller should not chase them.
-It is first order with a time constant of a minute, integrated over the `millis()` that actually elapsed, so like `pi_ki` it does not depend on how long one `loop()` takes.
+It is first order with a time constant of ten minutes, integrated over the `millis()` that actually elapsed, so like `pi_ki` it does not depend on how long one `loop()` takes.
 The first reading after a boot seeds it, so it starts at the room rather than climbing there from zero.
 
 ## Tests

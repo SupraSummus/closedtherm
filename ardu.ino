@@ -9,6 +9,7 @@
 #include <Preferences.h>
 
 #include "pi_source.h"
+#include "thermometer.h"
 
 #define RW_MODE false
 #define RO_MODE true
@@ -18,6 +19,7 @@ const int outPin = 27; // for Arduino, 5 for ESP8266 (D1), 22 for ESP32
 OpenTherm ot(inPin, outPin);
 
 const int tempSensorPin = 35; // analog pin for temperature sensor
+Thermometer thermometer(tempSensorPin);
 
 extern const char* ssid;
 extern const char* password;
@@ -36,16 +38,6 @@ float readReturnTemperature = 0.0;
 float readModulation = 0.0;
 float readDHWTemperature = 0.0;
 unsigned char readFault = 0;
-float temp_mv = 0.0;
-float temp_c = 0.0;
-
-// The sensor is noisy, so loop() feeds one reading per iteration into this ring
-// buffer and reports the average of it — a window of the last tempSamples
-// iterations, each as long as the OpenTherm exchanges below take.
-const int tempSamples = 20;
-float temp_samples[tempSamples];
-int temp_samples_next = 0;  // slot the next reading goes into
-int temp_samples_held = 0;  // slots filled so far, until the buffer wraps
 
 bool setCentralHeatingOn = true;
 bool setHotWaterOn = true;
@@ -88,22 +80,6 @@ unsigned long lastWifiConnected = 0;
 int wifi_reconnects = 0;
 
 uint32_t boot_count = 0;
-
-// Samples the sensor into the buffer and returns the average of the window.
-// Until the buffer fills it averages just the readings taken so far, so the
-// first values after a boot are not dragged towards zero by the empty slots.
-float sampleTempMillivolts() {
-    temp_samples[temp_samples_next] = analogReadMilliVolts(tempSensorPin);
-    temp_samples_next = (temp_samples_next + 1) % tempSamples;
-    if (temp_samples_held < tempSamples) {
-        temp_samples_held++;
-    }
-    float sum = 0.0;
-    for (int i = 0; i < temp_samples_held; i++) {
-        sum += temp_samples[i];
-    }
-    return sum / temp_samples_held;
-}
 
 // Looks a source up by the name /set was given, so an unknown name is a 400
 // rather than a silent fall back to manual.
@@ -168,8 +144,8 @@ void handleRoot() {
     doc["modulation"] = readModulation;
     doc["dhw_temp"] = readDHWTemperature;
     doc["fault"] = readFault;
-    doc["temp_sensor_mv"] = temp_mv;
-    doc["temp_sensor_c"] = temp_c;
+    doc["temp_sensor_mv"] = thermometer.millivolts;
+    doc["temp_sensor_c"] = thermometer.celsius;
 
     doc["wifi_reconnects"] = wifi_reconnects;
     doc["boot_count"] = boot_count;
@@ -303,9 +279,7 @@ void setup()
     server.on("/set", handleSet);
     server.begin();
 
-    // temperature sensor
-    pinMode(tempSensorPin, INPUT);
-    analogSetPinAttenuation(tempSensorPin, ADC_0db); // 0-1V range
+    thermometer.begin();
 
     // read saved CH temperature setpoint
     bool ok = preferences.begin("opentherm", RO_MODE);
@@ -375,17 +349,16 @@ void loop()
         lastWifiConnected = millis();
     }
 
-    // read temperature sensor
-    temp_mv = sampleTempMillivolts();
-    temp_c = 18.0 - (temp_mv - 671.0) / 2.0;
-    Serial.println("Temperature sensor value: " + String(temp_mv) + " mV, " + String(temp_c) + " C");
+    thermometer.sample();
+    Serial.println("Temperature sensor value: " + String(thermometer.millivolts) + " mV, " +
+                   String(thermometer.celsius) + " C");
     server.handleClient();
 
     // Run the controller whether or not it is the one driving, so / reports what
     // it would do before anyone trusts it with the boiler. boilerTemperatureTarget()
     // answers its own output only when the switch is on it, which is the one case
     // that does not read the argument, so there is no circularity here.
-    pi.update(setChTempSource == CH_TEMP_PI, setCentralHeatingOn, temp_c,
+    pi.update(setChTempSource == CH_TEMP_PI, setCentralHeatingOn, thermometer.celsius,
               boilerTemperatureTarget(), millis());
     if (pi.integralDueToSave(millis())) {
         savePreference(piIntegralName, pi.control.integral);

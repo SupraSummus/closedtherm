@@ -53,7 +53,7 @@ The PI algorithm sits in two files, neither of which is the sketch:
 - `pi.h` is arithmetic and nothing else — no Arduino, no boiler. It is handed a reading and a clock, and called by whichever of its three states applies.
 - `pi_source.h` is that algorithm wired up as a source of CH setpoints: its tunables, what they are called over HTTP, the NVS keys they are saved under, the values they accept, which state the controller belongs in, and what `/` reports. A tunable is one row of `piSettings` and nothing else: that one name is the `/set` parameter, the NVS key and the path under `pi` at once.
 
-`ardu.ino` keeps only what is its own: the sensor, the NVS namespace, the HTTP routes, and the switch that picks between sources.
+`ardu.ino` keeps only what is its own: the sensor pin, the NVS namespace, the HTTP routes, and the switch that picks between sources.
 
 `pi_ki` is in setpoint degrees per degree of room error per **second**: the controller integrates over the time that actually elapsed, so its tuning does not depend on how long one `loop()` takes.
 Output and integral are both clamped to 5–80 °C, and clamping the integral to that same range is what stops it winding up while the output sits at a limit.
@@ -72,11 +72,20 @@ Losing it to a watchdog reset would cost that same day of under-heating, so it g
 The wait is jittered by up to two minutes so the writes do not land on a rigid grid.
 A reboot picks the integral up where it left off, and `/set` can seed it directly rather than waiting for it to climb.
 
-The gains above are a starting point rather than a tuned result, and so is the sensor's calibration (671 mV at 18 °C, 2 mV per degree).
+The gains above are a starting point rather than a tuned result, and so is the sensor's calibration in `thermometer.h` (671 mV at 18 °C, 2 mV per degree).
 `/` reports `pi.integral` and `pi.output` for following a tuning run from outside, and `effective_ch_temp` for the number the switch currently selects.
 The error is `pi.target_temp` minus `temp_sensor_c`, both of which are there already.
 That is not quite the number the boiler holds: setpoints go out every 10 s, or sooner if one moves by 0.5 °C or more.
 Without that deadband the PI output, which drifts a little on every pass, would cost an OpenTherm exchange every time.
+
+## Room sensor
+
+The room temperature is a transistor junction on an analog pin.
+`thermometer.h` owns it end to end, from setting the pin up through reading it to degrees; `ardu.ino` owns the one instance and says which pin.
+
+The reading is noisy in a way that looks like short one-sided dips, most likely the supply rail sagging under the radio's current bursts.
+Each `loop()` pass takes one reading, and `temp_sensor_mv` and `temp_sensor_c` are the median of the last 64: a dip lands on one pass or none, and the median drops it however long it lasted, where an average would follow it.
+A median of whole millivolts moves in 0.5 mV steps, a quarter of a degree, which is the price of that until a slower filter smooths it.
 
 ## Tests
 
@@ -90,7 +99,8 @@ Tests then drive it the way the ESP32 would: `setup()`, `loop()` with a controll
 They check status codes, NVS keys, reconnect behaviour, setpoint refresh timing and the `/` JSON, not the real network stack.
 
 `test/test_pi.cpp` tests `pi.h` on its own instead, which needs none of that: the controller holds no opinion about boilers and is handed its clock, so a test is a few calls and an assertion.
-The sketch tests then cover only the wiring — which state the sketch puts the controller in, and that its settings survive `/set`, NVS and `/`, walking `piSettings` rather than naming each one.
+`test/test_thermometer.cpp` tests `thermometer.h` on its own against the fake ADC, which a test can hand a sequence of readings.
+The sketch tests then cover only the wiring — which state the sketch puts the controller in, that its settings survive `/set`, NVS and `/`, walking `piSettings` rather than naming each one, and that a `loop()` pass reads the sensor and `/` reports it.
 
 Add tests as `TEST_CASE`s in whichever of the two fits; the Makefile picks up any new `test/test_*.cpp`.
 

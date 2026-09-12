@@ -2,6 +2,7 @@
 #pragma once
 #include <stdint.h>
 #include <cstdio>
+#include <deque>
 #include <string>
 
 #define IRAM_ATTR
@@ -10,7 +11,8 @@ enum { ADC_0db };
 
 namespace fake {
 inline uint32_t millis = 0;
-inline int adc_mv = 671;
+inline int adc_mv = 671;              // what the ADC reads once adc_readings is used up
+inline std::deque<int> adc_readings;  // what it reads first, in this order
 inline long random_value = 0;
 }
 
@@ -20,7 +22,14 @@ inline unsigned long millis() { return fake::millis; }
 inline long random(long howbig) { return howbig > 0 ? fake::random_value % howbig : 0; }
 inline void pinMode(int, int) {}
 inline void analogSetPinAttenuation(int, int) {}
-inline int analogReadMilliVolts(int) { return fake::adc_mv; }
+inline int analogReadMilliVolts(int) {
+    if (fake::adc_readings.empty()) {
+        return fake::adc_mv;
+    }
+    int mv = fake::adc_readings.front();
+    fake::adc_readings.pop_front();
+    return mv;
+}
 
 class String {
 public:

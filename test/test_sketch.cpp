@@ -19,12 +19,12 @@ struct Booted {
         setCentralHeatingOn = setHotWaterOn = true;
         setBoilerTemperature = 60;
         setDHWTemperature = 55;
-        temp_mv = temp_c = 0;
         boot_count = 0;
         wifi_reconnects = 0;
         lastWifiConnected = 0;
-        temp_samples_next = temp_samples_held = 0;
+        thermometer = Thermometer(tempSensorPin);
         fake::adc_mv = 671;
+        fake::adc_readings.clear();
         fake::millis = 0;  // setup() starts the clocks from here, as a boot does
         fake::random_value = piIntegralSaveJitter;  // jitter of exactly none, for round numbers
         lastSetpointSent = 0;
@@ -47,11 +47,11 @@ void tick(bool online, uint32_t ms) {
 }
 
 // Points the sensor at a room temperature, in the millivolts loop() converts back,
-// and clears the averaging window so the next tick reports it outright instead of
-// blending it with the readings before it.
+// and clears the window so the next tick reports it outright instead of the
+// median of it and the readings before it.
 void roomTemperature(float celsius) {
-    fake::adc_mv = static_cast<int>(671.0 - (celsius - 18.0) * 2.0);
-    temp_samples_next = temp_samples_held = 0;
+    fake::adc_mv = static_cast<int>(Thermometer::toMillivolts(celsius));
+    thermometer = Thermometer(tempSensorPin);
 }
 
 JsonDocument parsed(const WebServer::Response& response) {
@@ -183,29 +183,17 @@ TEST_CASE("coming back online restarts the reconnect countdown and keeps the cou
     CHECK(wifi_reconnects == 2);
 }
 
-TEST_CASE("temperature is averaged over the readings taken so far, one per loop") {
+// The arithmetic is test_thermometer.cpp's; this is the wiring.
+TEST_CASE("loop() takes one thermometer pass off the ADC and / reports it") {
     Booted b;
     fake::adc_mv = 701;
     tick(true, 1000);
     JsonDocument doc = status();
-    CHECK(doc["temp_sensor_mv"].as<float>() == 701);  // the one reading taken, not it over a full window
-    CHECK(doc["temp_sensor_c"].as<float>() == 3);     // degrees follow the average
+    CHECK(doc["temp_sensor_mv"].as<float>() == 701);
+    CHECK(doc["temp_sensor_c"].as<float>() == 3);
     fake::adc_mv = 601;
     tick(true, 2000);
-    CHECK(status()["temp_sensor_mv"].as<float>() == 651);  // averaged with the first, which still counts
-}
-
-TEST_CASE("a reading falls out of the average once the window has moved past it") {
-    Booted b;
-    fake::adc_mv = 700;
-    tick(true, 1000);  // one reading...
-    fake::adc_mv = 600;
-    for (int i = 1; i < tempSamples; i++) {  // ...then the rest of the window behind it
-        tick(true, 1000 + i);
-    }
-    CHECK(status()["temp_sensor_mv"].as<float>() == 605);  // the 700 still weighs on the average
-    tick(true, 2000);
-    CHECK(status()["temp_sensor_mv"].as<float>() == 600);  // the newest reading has overwritten it
+    CHECK(status()["temp_sensor_mv"].as<float>() == 651);  // the median of the two passes
 }
 
 TEST_CASE("pushSetpoints() writes to the boiler every 10 s, not on every loop() pass") {

@@ -10,7 +10,7 @@ namespace {
 const int pin = 35;
 
 // So many passes over a steady sensor, this far apart on the clock.
-void passes(Thermometer& t, int count, int mv, unsigned long stepMs = 100) {
+void passes(Thermometer& t, int count, int mv, uint32_t stepMs = 100) {
     fake::adc_mv = mv;
     for (int i = 0; i < count; i++) {
         fake::millis += stepMs;
@@ -66,6 +66,16 @@ TEST_CASE("the low-pass follows a step of the median with a time constant of abo
     CHECK(t.millivolts > 690);  // ...the low-pass has barely started
     passes(t, 600 - Thermometer::window, 600);  // a minute since the step, at 100 ms a pass
     CHECK(t.millivolts == doctest::Approx(700 - 100 * 0.632).epsilon(0.01));  // 1 - 1/e of the way
+}
+
+TEST_CASE("the low-pass takes millis() wrapping past 32 bits as the second it was") {
+    Thermometer t(pin);
+    fake::millis = UINT32_MAX - 1000;
+    passes(t, 1, 700, 0);  // seeded a second before the wrap
+    fake::millis = 0;
+    passes(t, 1, 600, 0);  // the median is 650 now, one second on through zero
+    CHECK(t.millivolts < 700);
+    CHECK(t.millivolts > 690);  // a second of the way, not 49 days of it
 }
 
 TEST_CASE("the low-pass runs on the clock, not on passes") {

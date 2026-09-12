@@ -4,6 +4,8 @@
 // state; ardu.ino owns the one instance.
 #pragma once
 
+#include <stdint.h>
+
 struct PIController {
     // Tuning. Starting points rather than tuned values.
     float kp = 8.0;    // output units per unit of error
@@ -18,11 +20,11 @@ struct PIController {
     float error = 0.0;
     float integral = outMin;
     float output = outMin;
-    unsigned long lastUpdate = 0;
+    uint32_t lastUpdate = 0;
 
     // Starts the clock, so the first advance has a real interval behind it
     // rather than everything since zero.
-    void start(unsigned long now) {
+    void start(uint32_t now) {
         lastUpdate = now;
     }
 
@@ -31,7 +33,7 @@ struct PIController {
     // reads, so there is no argument to pass that the state will ignore.
 
     // In charge of something that can answer the error: integrate it.
-    void drive(float measured, unsigned long now) {
+    void drive(float measured, uint32_t now) {
         error = target - measured;
         integral = clamp(integral + ki * error * ((now - lastUpdate) / 1000.0f));
         lastUpdate = now;
@@ -40,7 +42,7 @@ struct PIController {
 
     // In charge, but nothing can act on the output: banking the error would only
     // pile up a demand nobody asked for, so leave the integral where it is.
-    void hold(float measured, unsigned long now) {
+    void hold(float measured, uint32_t now) {
         error = target - measured;
         lastUpdate = now;
         output = clamp(integral + kp * error);
@@ -51,7 +53,7 @@ struct PIController {
     // last stopped moving it, and taking over would then jump the plant to that.
     // Sit where the output matches what is really going out instead, so taking over
     // changes nothing at that instant — as far as the range reaches, anyway.
-    void track(float measured, float driven, unsigned long now) {
+    void track(float measured, float driven, uint32_t now) {
         error = target - measured;
         integral = clamp(driven - kp * error);
         lastUpdate = now;

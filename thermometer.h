@@ -30,7 +30,7 @@ struct Thermometer {
     // briefly, which the median has no reason to drop. Its time constant is in
     // seconds off millis(), not in passes.
     static constexpr float timeConstant = 60.0;
-    unsigned long lastSample = 0;
+    uint32_t lastSample = 0;
 
     // As of the last pass. millivolts and celsius are what the thermometer
     // says: the median, low-passed.
@@ -47,7 +47,7 @@ struct Thermometer {
 
     // One pass: the reading and the time, both off the board.
     void sample() {
-        unsigned long now = millis();
+        uint32_t now = millis();
         readings[next] = analogReadMilliVolts(pin);
         next = (next + 1) % window;
         if (held < window) {

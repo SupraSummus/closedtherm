@@ -23,7 +23,7 @@ PIController integralOnly() {
 TEST_CASE("the integral follows elapsed time, not the number of calls") {
     PIController often = integralOnly();
     PIController seldom = integralOnly();
-    for (unsigned long t = 1000; t <= 10000; t += 1000) {
+    for (uint32_t t = 1000; t <= 10000; t += 1000) {
         often.drive(18, t);
     }
     seldom.drive(18, 10000);
@@ -31,9 +31,16 @@ TEST_CASE("the integral follows elapsed time, not the number of calls") {
     CHECK(often.integral == doctest::Approx(often.outMin + 30));  // 10 s of a 3 degree error
 }
 
+TEST_CASE("millis() wrapping past 32 bits is one more second, not 49 days back") {
+    PIController pi = integralOnly();
+    pi.start(UINT32_MAX - 500);
+    pi.drive(18, 500);  // 1001 ms later, having gone through zero
+    CHECK(pi.integral == doctest::Approx(pi.outMin + 3).epsilon(0.01));
+}
+
 TEST_CASE("the integral does not wind up past the output range") {
     PIController pi = integralOnly();
-    for (unsigned long t = 1000; t <= 60000; t += 1000) {
+    for (uint32_t t = 1000; t <= 60000; t += 1000) {
         pi.drive(18, t);  // far longer than it takes to reach the ceiling
     }
     CHECK(pi.integral == pi.outMax);
@@ -62,7 +69,7 @@ TEST_CASE("the output follows the error and stays inside the range") {
 
 TEST_CASE("holding leaves the integral alone, and does not bank the time either") {
     PIController pi = integralOnly();
-    for (unsigned long t = 1000; t <= 20000; t += 1000) {
+    for (uint32_t t = 1000; t <= 20000; t += 1000) {
         pi.hold(18, t);
     }
     CHECK(pi.integral == pi.outMin);
@@ -76,7 +83,7 @@ TEST_CASE("tracking sits where the output matches what is in charge") {
     pi.target = 21;
     pi.ki = 1.0;  // would run away in seconds if tracking integrated
     pi.start(0);
-    for (unsigned long t = 1000; t <= 20000; t += 1000) {
+    for (uint32_t t = 1000; t <= 20000; t += 1000) {
         pi.track(18, 55, t);
     }
     CHECK(pi.output == doctest::Approx(55));

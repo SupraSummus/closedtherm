@@ -102,6 +102,7 @@ bash test.sh      # g++ and make; first run downloads doctest and ArduinoJson (p
 The sketch is tested as is, on the host.
 `test/test_sketch.cpp` includes `ardu.ino` and compiles it against `test/fakes/`, which stand in for the Arduino core, WebServer, Preferences, WiFi and OpenTherm; ArduinoJson is the real library.
 Tests then drive it the way the ESP32 would: `setup()`, `loop()` with a controlled clock, HTTP handlers through the recorded routes.
+Timestamps are `uint32_t` on the host as on the board, so `millis()` wraps in the tests where it wraps after 49 days on the ESP32.
 They check status codes, NVS keys, reconnect behaviour, setpoint refresh timing and the `/` JSON, not the real network stack.
 
 `test/test_pi.cpp` tests `pi.h` on its own instead, which needs none of that: the controller holds no opinion about boilers and is handed its clock, so a test is a few calls and an assertion.

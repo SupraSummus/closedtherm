@@ -91,7 +91,8 @@ Each `loop()` pass takes one reading and the median of the last 16 goes on: a di
 The low-pass is against the temperature itself moving briefly: a draught, a door, someone standing next to the sensor.
 Those are real readings the median has no reason to drop, and the controller should not chase them.
 It is first order with a time constant of ten minutes, integrated over the `millis()` that actually elapsed, so like `pi_ki` it does not depend on how long one `loop()` takes.
-The first reading after a boot seeds it, so it starts at the room rather than climbing there from zero.
+For its first ten minutes the time constant is the time since the first reading instead, which makes the filter the plain mean of every median so far.
+The first reading after a boot has been seen a dozen degrees off, and this way it counts for one pass rather than seeding the whole ten minutes.
 
 ## Tests
 

@@ -1,11 +1,14 @@
 #include <Arduino.h>
 #include <math.h>
+#include <stdlib.h>
 #include <OpenTherm.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+
+#include "pi_source.h"
 
 #define RW_MODE false
 #define RO_MODE true
@@ -49,8 +52,32 @@ bool setHotWaterOn = true;
 float setBoilerTemperature = 60.0;
 float setDHWTemperature = 55.0;
 
+// Which algorithm decides the CH setpoint. To add one: append an enumerator,
+// append its API name below, and answer the new case in boilerTemperatureTarget().
+// The number is what goes to NVS, so append rather than renumber, or a saved
+// setting comes back as a different algorithm.
+enum ChTempSource {
+    CH_TEMP_MANUAL = 0,
+    CH_TEMP_PI = 1,
+};
+
+// The name each source goes by in the HTTP API, indexed by the enum above — an
+// enumerator with no name here reads past the end, and nothing catches that but
+// this comment.
+const char* const chTempSourceNames[] = {"manual", "pi"};
+const int chTempSourceCount = sizeof(chTempSourceNames) / sizeof(chTempSourceNames[0]);
+
+ChTempSource setChTempSource = CH_TEMP_MANUAL;
+
+// Room temperature in, CH setpoint out. What it is and how it is wired to the
+// boiler are both in pi_source.h; here it is one of the algorithms the switch
+// above can pick, and its output is a flow temperature in degrees C.
+PISource pi;
+
 // state of pushSetpoints(); NAN means nothing was sent yet, so the first pass pushes
 const unsigned long setpointInterval = 10000; // 10 s between refreshes
+const float setpointEpsilon = 0.5;  // smallest change worth an early write, so the
+                                    // PI output does not write on every pass
 unsigned long lastSetpointSent = 0;
 float sentBoilerTemperature = NAN;
 float sentDHWTemperature = NAN;
@@ -78,6 +105,39 @@ float sampleTempMillivolts() {
     return sum / temp_samples_held;
 }
 
+// Looks a source up by the name /set was given, so an unknown name is a 400
+// rather than a silent fall back to manual.
+bool parseChTempSource(const String& value, ChTempSource* source) {
+    for (int i = 0; i < chTempSourceCount; i++) {
+        if (value == chTempSourceNames[i]) {
+            *source = static_cast<ChTempSource>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Every name, for the error a rejected one answers with.
+String chTempSourceNameList() {
+    String list = chTempSourceNames[0];
+    for (int i = 1; i < chTempSourceCount; i++) {
+        list = list + ", " + chTempSourceNames[i];
+    }
+    return list;
+}
+
+// The CH setpoint the boiler is actually asked for. Answer every source here:
+// leaving one out is a -Wswitch warning, not a setpoint that quietly reads manual.
+float boilerTemperatureTarget() {
+    switch (setChTempSource) {
+        case CH_TEMP_PI:
+            return pi.setpoint();
+        case CH_TEMP_MANUAL:
+            break;
+    }
+    return setBoilerTemperature;
+}
+
 void IRAM_ATTR handleInterrupt()
 {
     ot.handleInterrupt();
@@ -86,7 +146,7 @@ void IRAM_ATTR handleInterrupt()
 void handleRoot() {
     Serial.println("Handling HTTP request");
 
-    StaticJsonDocument<1024> doc;
+    JsonDocument doc;
     doc["ch_on"] = readCentralHeatingOn;
     doc["dhw_on"] = readHotWaterOn;
     doc["flame_on"] = readFlameOn;
@@ -98,6 +158,11 @@ void handleRoot() {
     doc["requested_dhw_on"] = setHotWaterOn;
     doc["requested_ch_temp"] = setBoilerTemperature;
     doc["requested_dhw_temp"] = setDHWTemperature;
+
+    doc["ch_temp_source"] = chTempSourceNames[setChTempSource];
+    doc["effective_ch_temp"] = boilerTemperatureTarget();
+    pi.report(doc);
+
     doc["pressure"] = readPressure;
     doc["return_temp"] = readReturnTemperature;
     doc["modulation"] = readModulation;
@@ -128,6 +193,26 @@ void savePreference(const char* key, float value) {
     preferences.end();
 }
 
+void savePreference(const char* key, uint32_t value) {
+    preferences.begin("opentherm", RW_MODE);
+    preferences.putUInt(key, value);
+    preferences.end();
+}
+
+// String::toFloat() reads "abc" as 0 and stops at the first junk character, which
+// would let a typo through wherever 0 is inside the allowed range — as it is for
+// the PI gains. Parse the whole string or reject it.
+bool parseFloat(const String& value, float* parsed) {
+    const char* start = value.c_str();
+    char* end = NULL;
+    float result = strtof(start, &end);
+    if (end == start || *end != '\0' || isnan(result) || isinf(result)) {
+        return false;
+    }
+    *parsed = result;
+    return true;
+}
+
 // /set?requested_ch_on=on&requested_ch_temp=60 — parameters are optional, but
 // at least one is required, and they are named after the keys / reports them
 // under. The whole request is checked before anything is applied, so it either
@@ -141,14 +226,24 @@ void handleSet() {
         String name = server.argName(i);
         String value = server.arg(name.c_str());
         String error;
+        float number = 0.0;
         if (name == "requested_ch_on" || name == "requested_dhw_on") {
             if (!(value == "on" || value == "off")) {
                 error = "Invalid " + name + ", expected on or off";
             }
         } else if (name == "requested_ch_temp" || name == "requested_dhw_temp") {
-            float temp = value.toFloat();
-            if (!(temp > 0.0 && temp < 100.0)) {  // both comparisons also reject nan and inf
+            if (!(parseFloat(value, &number) && number > 0.0 && number < 100.0)) {
                 error = "Invalid " + name + ", expected 0 < t < 100";
+            }
+        } else if (name == "ch_temp_source") {
+            ChTempSource source;
+            if (!parseChTempSource(value, &source)) {
+                error = "Invalid " + name + ", expected one of " + chTempSourceNameList();
+            }
+        } else if (const PISetting* setting = pi.setting(name)) {
+            if (!(parseFloat(value, &number) && number >= setting->min && number <= setting->max)) {
+                error = "Invalid " + name + ", expected " + String(setting->min) +
+                        " to " + String(setting->max);
             }
         } else {
             error = "Unknown parameter " + name;
@@ -174,6 +269,16 @@ void handleSet() {
     if (server.hasArg("requested_dhw_temp")) {
         setDHWTemperature = server.arg("requested_dhw_temp").toFloat();
         savePreference("req_dhw_temp", setDHWTemperature);
+    }
+    if (server.hasArg("ch_temp_source")) {
+        parseChTempSource(server.arg("ch_temp_source"), &setChTempSource);  // checked above
+        savePreference("ch_temp_src", static_cast<uint32_t>(setChTempSource));
+    }
+    for (int i = 0; i < piSettingCount; i++) {
+        if (server.hasArg(piSettings[i].name)) {
+            pi.set(piSettings[i], server.arg(piSettings[i].name).toFloat());
+            savePreference(piSettings[i].name, pi.value(piSettings[i]));
+        }
     }
     handleRoot();
 }
@@ -209,6 +314,13 @@ void setup()
     setHotWaterOn = preferences.getBool("dhw_on", setHotWaterOn);
     setBoilerTemperature = preferences.getFloat("req_ch_temp", setBoilerTemperature);
     setDHWTemperature = preferences.getFloat("req_dhw_temp", setDHWTemperature);
+    // A number no longer on the list means NVS holds a source this build does not
+    // have, after a downgrade or a renumbering; fall back instead of indexing past
+    // the names.
+    uint32_t storedSource = preferences.getUInt("ch_temp_src", static_cast<uint32_t>(setChTempSource));
+    setChTempSource = storedSource < static_cast<uint32_t>(chTempSourceCount)
+                          ? static_cast<ChTempSource>(storedSource) : CH_TEMP_MANUAL;
+    pi.load(preferences);
     boot_count = preferences.getUInt("boot_count", boot_count);
     boot_count++;
     preferences.end();
@@ -218,21 +330,27 @@ void setup()
     preferences.putUInt("boot_count", boot_count);
     preferences.end();
 
+    pi.start(millis());
 }
 
-// Sends both setpoints to the boiler every setpointInterval, or right away
-// when one of them changes. Called on every loop() pass.
+// Sends both setpoints to the boiler every setpointInterval, or right away when
+// one of them moves by setpointEpsilon or more. Called on every loop() pass.
+// The PI output drifts by a fraction of a degree between passes, so without that
+// deadband it would write on every pass; a smaller change still goes out with
+// the next refresh.
 void pushSetpoints() {
-    bool unchanged = setBoilerTemperature == sentBoilerTemperature &&
-                     setDHWTemperature == sentDHWTemperature;
-    if (unchanged && millis() - lastSetpointSent < setpointInterval) {
+    float boilerTemperature = boilerTemperatureTarget();
+    // NAN (nothing sent yet) makes both comparisons false, so the first pass counts as changed.
+    bool changed = !(fabs(boilerTemperature - sentBoilerTemperature) < setpointEpsilon) ||
+                   !(fabs(setDHWTemperature - sentDHWTemperature) < setpointEpsilon);
+    if (!changed && millis() - lastSetpointSent < setpointInterval) {
         return;
     }
-    sentBoilerTemperature = setBoilerTemperature;
+    sentBoilerTemperature = boilerTemperature;
     sentDHWTemperature = setDHWTemperature;
     lastSetpointSent = millis();
 
-    bool ok = ot.setBoilerTemperature(setBoilerTemperature);
+    bool ok = ot.setBoilerTemperature(boilerTemperature);
     Serial.println("Set Boiler Temperature: " + String(ok ? "OK" : "Failed"));
     server.handleClient();
 
@@ -261,6 +379,20 @@ void loop()
     temp_mv = sampleTempMillivolts();
     temp_c = 18.0 - (temp_mv - 671.0) / 2.0;
     Serial.println("Temperature sensor value: " + String(temp_mv) + " mV, " + String(temp_c) + " C");
+    server.handleClient();
+
+    // Run the controller whether or not it is the one driving, so / reports what
+    // it would do before anyone trusts it with the boiler. boilerTemperatureTarget()
+    // answers its own output only when the switch is on it, which is the one case
+    // that does not read the argument, so there is no circularity here.
+    pi.update(setChTempSource == CH_TEMP_PI, setCentralHeatingOn, temp_c,
+              boilerTemperatureTarget(), millis());
+    if (pi.integralDueToSave(millis())) {
+        savePreference(piIntegralName, pi.control.integral);
+    }
+    Serial.println("PI error " + String(pi.control.error) + " C, output " +
+                   String(pi.control.output) + " C, CH setpoint from " +
+                   chTempSourceNames[setChTempSource]);
     server.handleClient();
 
     // Set/Get Boiler Status

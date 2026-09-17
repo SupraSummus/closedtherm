@@ -53,7 +53,8 @@ float setBoilerTemperature = 60.0;
 float setDHWTemperature = 55.0;
 
 // Which algorithm decides the CH setpoint. To add one: append an enumerator,
-// append its API name below, and answer the new case in boilerTemperatureTarget().
+// append its API name below, and answer the new case in boilerTemperatureTarget()
+// and centralHeatingDemand(), which are the two questions a source answers.
 // The number is what goes to NVS, so append rather than renumber, or a saved
 // setting comes back as a different algorithm.
 enum ChTempSource {
@@ -122,6 +123,25 @@ float boilerTemperatureTarget() {
     return setBoilerTemperature;
 }
 
+// Whether the boiler is told to heat at all, which is the setpoint's other half:
+// requested_ch_on has to allow it, and the source in charge has to want it.
+// pi_source.h says why a source ever asks to be off rather than for less.
+//
+// Answer every source here, as boilerTemperatureTarget() does. Manual has no
+// opinion to answer with: the number is the operator's, and so is the switch.
+bool centralHeatingDemand() {
+    if (!setCentralHeatingOn) {
+        return false;
+    }
+    switch (setChTempSource) {
+        case CH_TEMP_PI:
+            return pi.heatDemand;
+        case CH_TEMP_MANUAL:
+            break;
+    }
+    return true;
+}
+
 void IRAM_ATTR handleInterrupt()
 {
     ot.handleInterrupt();
@@ -145,6 +165,7 @@ void handleRoot() {
 
     doc["ch_temp_source"] = chTempSourceNames[setChTempSource];
     doc["effective_ch_temp"] = boilerTemperatureTarget();
+    doc["ch_demand"] = centralHeatingDemand();
     pi.report(doc);
 
     doc["pressure"] = readPressure;
@@ -379,6 +400,9 @@ void loop()
     // it would do before anyone trusts it with the boiler. boilerTemperatureTarget()
     // answers its own output only when the switch is on it, which is the one case
     // that does not read the argument, so there is no circularity here.
+    //
+    // What goes in is the operator's switch, not centralHeatingDemand(): the
+    // controller's own half of that demand is what this call works out.
     pi.update(setChTempSource == CH_TEMP_PI, setCentralHeatingOn, thermometer.celsius,
               boilerTemperatureTarget(), millis());
     if (pi.integralDueToSave(millis())) {
@@ -386,11 +410,12 @@ void loop()
     }
     Serial.println("PI error " + String(pi.control.error) + " C, output " +
                    String(pi.control.output) + " C, CH setpoint from " +
-                   chTempSourceNames[setChTempSource]);
+                   chTempSourceNames[setChTempSource] + ", CH demand " +
+                   String(centralHeatingDemand() ? "on" : "off"));
     server.handleClient();
 
     // Set/Get Boiler Status
-    unsigned long response = ot.setBoilerStatus(setCentralHeatingOn, setHotWaterOn, false, false, false);
+    unsigned long response = ot.setBoilerStatus(centralHeatingDemand(), setHotWaterOn, false, false, false);
     responseStatus = ot.getLastResponseStatus();
     readCentralHeatingOn = ot.isCentralHeatingActive(response);
     readHotWaterOn = ot.isHotWaterActive(response);

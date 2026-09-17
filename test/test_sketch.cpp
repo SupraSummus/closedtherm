@@ -415,7 +415,7 @@ TEST_CASE("a setpoint the room is already above is sent as CH off, not as a low 
     CHECK(status()["ch_demand"].as<bool>());
 
     roomTemperature(24);  // past target: the output clamps to its floor, under the room
-    tick(true, 2000);
+    tick(true, 601001);   // a dwell on from the last change, so this one is free to land
     CHECK_FALSE(ot.asked_central_heating);
     CHECK_FALSE(status()["ch_demand"].as<bool>());
     CHECK(ot.asked_hot_water);  // central heating only; hot water is not this one's to switch
@@ -440,6 +440,27 @@ TEST_CASE("a cold room asks for heat however small the integral it boots with") 
         CHECK(ot.asked_central_heating);
         CHECK(ot.last_ch_setpoint > cold);
     }
+}
+
+// Whatever wanders over the crossing — sensor noise, a gain that answers the room
+// too hard, the loop closing faster than the house can — costs at most one boiler
+// cycle per two dwells.
+TEST_CASE("the demand cannot flip twice inside the dwell") {
+    Booted b;
+    setChTempSource = CH_TEMP_PI;
+    pi.control.ki = 0;
+    roomTemperature(18);
+    tick(true, 1000);
+    CHECK(pi.heatDemand);  // a boot owes nothing to a change it did not make
+
+    roomTemperature(30);  // far enough past target to want off outright
+    tick(true, 2000);
+    CHECK(pi.heatDemand);  // but not this soon after the last change
+    CHECK(ot.asked_central_heating);
+
+    tick(true, 601001);
+    CHECK_FALSE(pi.heatDemand);
+    CHECK_FALSE(ot.asked_central_heating);
 }
 
 // The switch is the operator's and the demand is the controller's; either one
@@ -476,17 +497,19 @@ TEST_CASE("switching itself off parks the integral by the room, not on the floor
     pi.control.integral = 60;  // as a cold house left it
     pi.control.ki = 0.1;       // 0.1 C per second at a degree over target
     roomTemperature(22);       // over target, so driving winds the integral down
-    for (uint32_t t = 1000; t <= 400000; t += 1000) {
+    for (uint32_t t = 1000; t <= 700000; t += 1000) {
         tick(true, t);
     }
     CHECK_FALSE(centralHeatingDemand());
-    // Stopped where the output met the room, 22 + kp * 1 degree of overshoot,
-    // rather than carrying on down to outMin.
-    CHECK(pi.control.integral == doctest::Approx(22 + pi.control.kp).epsilon(0.01));
+    // It came to rest on the room rather than carrying on down to outMin, which is
+    // the hours-long climb back this avoids. How far past the crossing it got before
+    // resting is the dwell's doing: driving carries on until the change is allowed
+    // to land, and at this test's ki that is all the way to the floor.
+    CHECK(pi.control.integral == doctest::Approx(22));
 
     // The way back is the room cooling, with no help from the frozen integral.
     roomTemperature(20);
-    tick(true, 401000);
+    tick(true, 1300000);  // a dwell on from the change above
     CHECK(centralHeatingDemand());
     CHECK(ot.asked_central_heating);
 }

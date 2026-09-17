@@ -64,10 +64,12 @@ So a source that would ask for less than the room asks to be switched off instea
 
 The criterion is the room temperature itself rather than a configured floor, because it is the one point in the range where the sign of the heat flow changes, and everything above it — the boiler's own minimum setpoint, its minimum modulation, how it cycles — is the boiler's business and not a number this sketch can know.
 
-Off is `hold()`, the same state `requested_ch_on=off` puts the controller in, so driving stops exactly where the output meets the reading and the integral parks a little above the room.
+Off is `hold()`, the same state `requested_ch_on=off` puts the controller in, so driving stops near where the output meets the reading and the integral parks a little above the room.
 Which is only safe because of the floor under the integral, below — without it, off would be a state the controller could not leave.
-There is no hysteresis and no minimum off time: `output - temp_sensor_c` moves by `pi_kp + 1` degrees for every degree the room moves, so the crossing is decisive, and the reading behind it is already low-passed over ten minutes.
-Cycling, if it shows up, will be the house's period rather than the loop's.
+The demand may change state at most once every ten minutes, which bounds the boiler to one cycle per twenty however the crossing is being wandered over — sensor noise, a `pi_kp` that answers the room too hard, or the loop closing faster than the house can answer.
+That is a time rather than a band of degrees on purpose: a band would bias where the room settles, while a dwell only limits how often the answer may change, not what it is.
+It is not a measured need — the median and the ten-minute low-pass leave the reading smooth enough that the crossing should be slow on its own — so treat it as the bound on a case nobody has seen rather than a cure for one somebody has.
+It costs the integral a little overshoot past the crossing, since driving carries on until the change is allowed to land: `pi_ki` times the error times the dwell, which at these gains is about a degree.
 
 `pi.heat_demand` on `/` is the controller's own half of that answer, and it is reported whether or not the controller is in charge.
 Out of charge it goes with the tracked output, so it says whether whatever is driving is above the room rather than what the controller would do instead — there is no answering that second question while the integral is busy tracking.

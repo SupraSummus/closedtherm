@@ -41,7 +41,16 @@ const char piIntegralName[] = "pi_integral";
 // and setup() restores it.
 const PISetting piSettings[] = {
     {"pi_target_temp", &PIController::target, 5, 35},
-    {"pi_kp", &PIController::kp, 0, 100},
+    // The proportional gain has to be strictly positive, which is this source's
+    // requirement rather than the controller's: heatDemand reads the sign of the
+    // error out of the output, and at a gain of zero the output carries none of it.
+    // The integral's floor would then pin the output to the room exactly, the
+    // demand would never come out on, and holding would keep it there for good.
+    // Any positive value avoids that; 0.1 is just the smallest one worth calling a
+    // gain, being far below anything usable.
+    {"pi_kp", &PIController::kp, 0.1, 100},
+    // Zero is a real setting here: no integral, just proportional, which the floor
+    // still keeps above the room.
     {"pi_ki", &PIController::ki, 0, 100},
     // Learned rather than tuned, and here for the same reasons the rest are: so
     // that a reboot restores it, / reports it, and a tuning run can seed it
@@ -62,6 +71,20 @@ struct PISource {
 
     // Whether this source was the one in charge as of the last update().
     bool inCharge = false;
+
+    // Whether this source wants the boiler heating at all, as of the last
+    // update(), which the sketch reads for the CH enable bit. Water arriving
+    // colder than the room it is sent to takes heat out of the house rather than
+    // putting it in, so an output below the reading is not a small demand but the
+    // wrong sign: what it means is that the boiler should be off. What the boiler
+    // does with a setpoint it cannot reach — its own minimum, its own cycling —
+    // is the boiler's business and not modelled here.
+    //
+    // Out of charge it goes with the tracked output, so it then says whether what
+    // is driving is above the room, not what this source would do instead. There
+    // is no answering that second question: tracking is what the integral is
+    // doing while something else drives.
+    bool heatDemand = false;
 
     // What the integral was when it last went to NVS, and how long to wait before
     // it is worth writing again.
@@ -130,13 +153,25 @@ struct PISource {
 
     // Which state the controller is in, which is the whole of what this source
     // has to decide: it is in charge only when the switch above says so, and the
-    // boiler can only answer the error while it is allowed to heat. `driven` is
-    // the setpoint in charge instead, and goes unread unless this source is out.
-    void update(bool nowInCharge, bool canHeat, float measured, float driven, uint32_t now) {
+    // boiler can only answer the error while it is both allowed to heat and
+    // being asked to. `driven` is the setpoint in charge instead, and goes unread
+    // unless this source is out.
+    //
+    // The demand is settled off the reading the controller is about to act on, so
+    // the state it goes into and the CH bit the sketch sends agree on the same pass.
+    //
+    // Turning the boiler off is what makes the controller's own floor load-bearing
+    // rather than tidy: off is hold(), which does not integrate, so an integral
+    // under the room would be one the controller could never raise — it would ask
+    // for less than the room, be switched off for it, and stay there. With the
+    // floor in pi.h, a room at or below target always comes out asking for heat,
+    // whatever the integral was.
+    void update(bool nowInCharge, bool allowed, float measured, float driven, uint32_t now) {
         inCharge = nowInCharge;
+        heatDemand = control.outputFor(measured) > measured;
         if (!inCharge) {
             control.track(measured, driven, now);
-        } else if (canHeat) {
+        } else if (allowed && heatDemand) {
             control.drive(measured, now);
         } else {
             control.hold(measured, now);
@@ -152,6 +187,7 @@ struct PISource {
             doc[piGroup][piSettings[i].name + piNameOffset] = value(piSettings[i]);
         }
         doc[piGroup]["output"] = control.output;
+        doc[piGroup]["heat_demand"] = heatDemand;
     }
 
     template <typename Prefs>

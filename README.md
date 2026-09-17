@@ -28,7 +28,7 @@ Each parameter is named after the key it appears under in that JSON, except the 
 | `temp_sensor_tau` | time constant of the room sensor's low-pass, in seconds, `0 <= t <= 3600` — `0` switches it off |
 | `ch_temp_source` | which algorithm decides the CH setpoint: `manual` or `pi` |
 | `pi_target_temp` | room temperature the PI controller aims for, `5 <= t <= 35` |
-| `pi_kp` | proportional gain, `0 <= k <= 100` |
+| `pi_kp` | proportional gain, `0.1 <= k <= 100` — strictly positive, see below |
 | `pi_ki` | integral gain, `0 <= k <= 100` |
 | `pi_integral` | the controller's learned base, `5 <= i <= 80` — settable to seed a tuning run |
 
@@ -56,20 +56,45 @@ The PI algorithm sits in two files, neither of which is the sketch:
 
 `ardu.ino` keeps only what is its own: the sensor pin, the NVS namespace, the HTTP routes, and the switch that picks between sources.
 
+### Asking for no heat
+
+Water arriving colder than the room it is sent to takes heat out of the house rather than putting it in, so a setpoint under the room temperature is not a small demand but the wrong sign, and a boiler told to hold one runs its own minimum and cycles against it instead.
+So a source that would ask for less than the room asks to be switched off instead, and `ardu.ino` clears the CH enable bit: `ch_demand` on `/` is what the boiler is told, and `requested_ch_on` is still the switch that overrides it.
+`manual` is left alone, since the number there is the operator's and so is the switch, and hot water is untouched either way.
+
+The criterion is the room temperature itself rather than a configured floor, because it is the one point in the range where the sign of the heat flow changes, and everything above it — the boiler's own minimum setpoint, its minimum modulation, how it cycles — is the boiler's business and not a number this sketch can know.
+
+Off is `hold()`, the same state `requested_ch_on=off` puts the controller in, so driving stops exactly where the output meets the reading and the integral parks a little above the room.
+Which is only safe because of the floor under the integral, below — without it, off would be a state the controller could not leave.
+There is no hysteresis and no minimum off time: `output - temp_sensor_c` moves by `pi_kp + 1` degrees for every degree the room moves, so the crossing is decisive, and the reading behind it is already low-passed over ten minutes.
+Cycling, if it shows up, will be the house's period rather than the loop's.
+
+`pi.heat_demand` on `/` is the controller's own half of that answer, and it is reported whether or not the controller is in charge.
+Out of charge it goes with the tracked output, so it says whether whatever is driving is above the room rather than what the controller would do instead — there is no answering that second question while the integral is busy tracking.
+
 `pi_ki` is in setpoint degrees per degree of room error per **second**: the controller integrates over the time that actually elapsed, so its tuning does not depend on how long one `loop()` takes.
-Output and integral are both clamped to 5–80 °C, and clamping the integral to that same range is what stops it winding up while the output sits at a limit.
+The output is clamped to 5–80 °C, and the integral to the same range with `temp_sensor_c` as its floor — clamping it rather than letting it run is what stops it winding up while the output sits at a limit.
+The room is the floor because the integral is the flow temperature the house needs before the error moves it, and one below the room is not a small base but a base that cannot heat.
+It is also what keeps the switch-off above from closing on itself: off is `hold()`, which does not integrate, so an integral under the room would be one the controller could never raise.
+With the floor, a room at or below `pi_target_temp` always comes out asking for heat, whatever the integral was — which is the property to check if this ever looks wrong.
+
+That property is why `pi_kp` has to be strictly positive, and why 0 is a `400` where `pi_ki` takes it happily.
+The demand reads the sign of the error out of the output, and at a gain of zero the output is the integral alone, which the floor pins to the room exactly — never above it.
+The demand would then never come out on, holding would keep the integral where it was, and the heating would be off for good with `/` reporting a setpoint equal to the room.
+A sweep of 12192 states (targets 5–35, rooms −5 to 40, integrals across the range) finds no such state at any positive gain, and every state below target stuck at a gain of zero.
 
 Out of charge the controller tracks, held at the value that makes `pi.output` equal the setpoint going out.
 Switching to `pi` then changes nothing at that instant, and the controller carries on from the real operating point rather than from wherever an idle integral had drifted.
-It cannot track past its own range, so a manual setpoint above 80 °C is matched only as far as 80.
-The integral is held again while `requested_ch_on` is `off`, since the boiler cannot answer an error it was never asked to.
+It cannot track past its own range, so a manual setpoint above 80 °C is matched only as far as 80, and one below the room only as far as the room puts the integral — which is a setpoint that meant "off" anyway, and still does once the controller takes over.
+The integral is held again while the boiler is not heating, whether because `requested_ch_on` is `off` or because the controller itself asked for it — either way the boiler cannot answer an error it was never asked to.
 
 ```sh
 curl 'http://boiler/set?ch_temp_source=pi&pi_target_temp=21&pi_kp=8&pi_ki=0.002'
 ```
 
-The integral is the slow half of that: it is what the controller learns about the house, and at these gains it takes the better part of a day to climb from its floor to a working flow temperature.
-Losing it to a watchdog reset would cost that same day of under-heating, so it goes to NVS while the controller is in charge — at most every ten minutes or so, and only once it has moved by a degree, which in a settled house is almost never.
+The integral is the slow half of that: it is what the controller learns about the house, and at these gains the last few degrees of the climb take hours, since the climb slows as the error it feeds on shrinks.
+The floor gets it started — a controller booting with an empty NVS lands on the room rather than on 5 — but not to the right number.
+Losing it to a watchdog reset would cost those hours in under-heating, so it goes to NVS while the controller is in charge — at most every ten minutes or so, and only once it has moved by a degree, which through the heating season is almost never.
 The wait is jittered by up to two minutes so the writes do not land on a rigid grid.
 A reboot picks the integral up where it left off, and `/set` can seed it directly rather than waiting for it to climb.
 

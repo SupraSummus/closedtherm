@@ -305,14 +305,16 @@ TEST_CASE("a setpoint change smaller than the deadband waits for the next refres
 TEST_CASE("a PI output drifting inside the deadband rides the 10 s refresh, not a write per pass") {
     Booted b;
     setChTempSource = CH_TEMP_PI;
-    pi.control.kp = 0;
     pi.control.ki = 0.01;  // 0.03 C per second at 3 below target: moves every pass, well inside 0.5
     roomTemperature(18);
-    for (uint32_t t = 1000; t <= 10000; t += 1000) {
+    tick(true, 1000);
+    float first = ot.last_ch_setpoint;
+    CHECK(ot.ch_setpoints == 1);
+    for (uint32_t t = 2000; t <= 10000; t += 1000) {
         tick(true, t);
     }
-    CHECK(pi.control.output > pi.control.outMin + 0.2);  // it did move...
-    CHECK(ot.ch_setpoints == 1);                          // ...but not enough to be worth an exchange each
+    CHECK(pi.control.output > first + 0.2);  // it did move...
+    CHECK(ot.ch_setpoints == 1);             // ...but not enough to be worth an exchange each
     tick(true, 11001);
     CHECK(ot.ch_setpoints == 2);
     CHECK(ot.last_ch_setpoint == doctest::Approx(pi.control.output));  // the refresh carries the drift
@@ -388,18 +390,105 @@ TEST_CASE("out of charge the controller tracks, so the switch does not jump the 
 TEST_CASE("the controller holds while central heating is switched off") {
     Booted b;
     setChTempSource = CH_TEMP_PI;
-    pi.control.kp = 0;  // integral alone, so the output reads it back directly
     pi.control.ki = 1.0;
-    roomTemperature(18);
+    roomTemperature(18);  // 3 below target, so the controller would be asking for heat
     CHECK(server.get("/set", {{"requested_ch_on", "off"}}).code == 200);
     for (uint32_t t = 1000; t <= 20000; t += 1000) {
         tick(true, t);
     }
-    CHECK(pi.control.integral == pi.control.outMin);  // an error the boiler was never asked to answer
+    CHECK(pi.control.integral == 18);  // the room's floor, and not a second of the error above it
 
     CHECK(server.get("/set", {{"requested_ch_on", "on"}}).code == 200);
     tick(true, 21000);
-    CHECK(pi.control.integral == doctest::Approx(pi.control.outMin + 3));  // and it picks up from there
+    CHECK(pi.control.integral == doctest::Approx(18 + 3));  // and it picks up from there
+}
+
+// A flow temperature under the room takes heat out of the house, so the way to
+// ask for less than that is the enable bit, not a smaller number.
+TEST_CASE("a setpoint the room is already above is sent as CH off, not as a low setpoint") {
+    Booted b;
+    setChTempSource = CH_TEMP_PI;
+    pi.control.ki = 0;    // the proportional term alone, so the reading decides outright
+    roomTemperature(18);  // 3 below target: 5 + 8 * 3, well over the room
+    tick(true, 1000);
+    CHECK(ot.asked_central_heating);
+    CHECK(status()["ch_demand"].as<bool>());
+
+    roomTemperature(24);  // past target: the output clamps to its floor, under the room
+    tick(true, 2000);
+    CHECK_FALSE(ot.asked_central_heating);
+    CHECK_FALSE(status()["ch_demand"].as<bool>());
+    CHECK(ot.asked_hot_water);  // central heating only; hot water is not this one's to switch
+}
+
+// The demand and the floor under the integral hold each other up. Without the
+// floor this closes: a small integral asks for less than the room, is switched off
+// for it, and off is a hold that does not integrate, so nothing raises it again and
+// the house sits below target for as long as it takes the room to fall far enough
+// to force the issue.
+TEST_CASE("a cold room asks for heat however small the integral it boots with") {
+    Booted b;
+    setChTempSource = CH_TEMP_PI;
+    pi.control.ki = 0;  // so nothing can climb out of it by integrating, either
+    CHECK(pi.control.integral == pi.control.outMin);  // as an empty NVS leaves it
+
+    uint32_t t = 0;
+    for (float cold : {20.0f, 19.0f, 15.0f}) {  // below target; at it exactly is off, and right
+        CAPTURE(cold);
+        roomTemperature(cold);
+        tick(true, t += 1000);
+        CHECK(ot.asked_central_heating);
+        CHECK(ot.last_ch_setpoint > cold);
+    }
+}
+
+// The switch is the operator's and the demand is the controller's; either one
+// off is off.
+TEST_CASE("the demand cannot switch central heating back on against requested_ch_on") {
+    Booted b;
+    setChTempSource = CH_TEMP_PI;
+    roomTemperature(18);  // the controller is asking for heat
+    CHECK(server.get("/set", {{"requested_ch_on", "off"}}).code == 200);
+    tick(true, 1000);
+    CHECK(pi.heatDemand);  // it still says what it would want...
+    CHECK_FALSE(ot.asked_central_heating);  // ...and is still not the one holding the switch
+    CHECK_FALSE(status()["ch_demand"].as<bool>());
+}
+
+// Manual has no opinion to answer with: the number is the operator's, and so is
+// the switch.
+TEST_CASE("a manual setpoint under the room is left alone") {
+    Booted b;  // manual is in charge
+    setBoilerTemperature = 10;
+    roomTemperature(22);
+    tick(true, 1000);
+    CHECK(ot.asked_central_heating);
+    CHECK(ot.last_ch_setpoint == 10);
+    CHECK(status()["ch_demand"].as<bool>());
+}
+
+// The same hold that serves requested_ch_on serves a demand of the controller's
+// own, which is what keeps the integral off the floor of the range: it stops
+// falling where the output meets the room, not hours below it.
+TEST_CASE("switching itself off parks the integral by the room, not on the floor") {
+    Booted b;
+    setChTempSource = CH_TEMP_PI;
+    pi.control.integral = 60;  // as a cold house left it
+    pi.control.ki = 0.1;       // 0.1 C per second at a degree over target
+    roomTemperature(22);       // over target, so driving winds the integral down
+    for (uint32_t t = 1000; t <= 400000; t += 1000) {
+        tick(true, t);
+    }
+    CHECK_FALSE(centralHeatingDemand());
+    // Stopped where the output met the room, 22 + kp * 1 degree of overshoot,
+    // rather than carrying on down to outMin.
+    CHECK(pi.control.integral == doctest::Approx(22 + pi.control.kp).epsilon(0.01));
+
+    // The way back is the room cooling, with no help from the frozen integral.
+    roomTemperature(20);
+    tick(true, 401000);
+    CHECK(centralHeatingDemand());
+    CHECK(ot.asked_central_heating);
 }
 
 TEST_CASE("the controller is given the reading the sketch reports, in degrees") {
@@ -528,12 +617,17 @@ TEST_CASE("/set rejects PI settings it cannot act on and changes nothing") {
         CAPTURE(bad);
         CHECK(server.get("/set", {{"pi_target_temp", bad}}).code == 400);
     }
-    // 0 is a valid gain, so a value that parses as far as the junk is not good enough.
+    // 0 is a valid integral gain, so a value that parses as far as the junk is not
+    // good enough.
     for (const char* bad : {"-1", "101", "abc", "inf", "8x", ""}) {
         CAPTURE(bad);
         CHECK(server.get("/set", {{"pi_kp", bad}}).code == 400);
         CHECK(server.get("/set", {{"pi_ki", bad}}).code == 400);
     }
+    // A proportional gain of zero is not, though: it would leave the output carrying
+    // no sign of the error, which is the one setting that can switch the heating off
+    // for good. See the row in pi_source.h.
+    CHECK(server.get("/set", {{"pi_kp", "0"}}).code == 400);
     CHECK(setChTempSource == CH_TEMP_MANUAL);
     CHECK(pi.control.target == 21);
     CHECK(pi.control.kp == 8);
@@ -542,6 +636,8 @@ TEST_CASE("/set rejects PI settings it cannot act on and changes nothing") {
 
     CHECK(server.get("/set", {{"pi_target_temp", "5"}}).code == 200);   // both ends are in
     CHECK(server.get("/set", {{"pi_target_temp", "35"}}).code == 200);
+    CHECK(server.get("/set", {{"pi_kp", "0.1"}}).code == 200);  // and the lowest gain there is
+    CHECK(server.get("/set", {{"pi_ki", "0"}}).code == 200);    // where no integral at all is fine
 }
 
 TEST_CASE("/ reports state as JSON") {
@@ -556,5 +652,6 @@ TEST_CASE("/ reports state as JSON") {
     // every one of its settings is prefixed with.
     CHECK(doc["pi"]["target_temp"].as<float>() == 21);
     CHECK(doc["pi"]["output"].as<float>() == pi.control.output);
+    CHECK(doc["pi"]["heat_demand"].as<bool>() == pi.heatDemand);
     CHECK(doc["pi_kp"].isNull());  // grouped, not also at the top level
 }

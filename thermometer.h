@@ -30,12 +30,22 @@ struct Thermometer {
     // briefly, which the median has no reason to drop. Its time constant is in
     // seconds off millis(), not in passes.
     //
-    // Until the time since the first pass reaches timeConstant, that time is the
-    // constant instead, which makes the filter the plain mean so far: the first
-    // pass after a boot has been seen a dozen degrees off, and this way it
-    // weighs one pass, not ten minutes.
-    static constexpr float timeConstant = 600.0;
-    float tau = 0.0;  // the one in force, in seconds
+    // How briefly a room has to move to be worth ignoring is a property of the
+    // room, so the constant is a setting: ardu.ino takes it over HTTP and keeps
+    // it in NVS. The band is what the sensor answers for, ends included, and 0
+    // is the low-pass off: the weight below is then dt / (0 + dt) and the median
+    // goes straight through.
+    static constexpr float defaultTimeConstant = 600.0;
+    static constexpr float minTimeConstant = 0.0;
+    static constexpr float maxTimeConstant = 3600.0;
+    float timeConstant = defaultTimeConstant;
+
+    // How long sampling has been going, and the constant in force until it
+    // reaches timeConstant: that makes the filter the plain mean so far, so the
+    // first pass after a boot, which has been seen a dozen degrees off, weighs
+    // one pass and not ten minutes. Accumulated rather than read off millis(),
+    // so it survives the wrap, and capped at the longest constant there can be.
+    float sampledFor = 0.0;
     uint32_t lastSample = 0;
 
     // As of the last pass. millivolts and celsius are what the thermometer
@@ -45,6 +55,20 @@ struct Thermometer {
     float celsius = 0.0;
 
     explicit Thermometer(int pin) : pin(pin) {}
+
+    // For what comes back from NVS, which a build with a different band may have
+    // written: a negative constant would leave the low-pass weight negative or
+    // unbounded rather than merely wrong. /set checks its own values instead, so
+    // that a bad one is a 400 and not a silent clamp.
+    void setTimeConstant(float seconds) {
+        if (seconds < minTimeConstant) {
+            seconds = minTimeConstant;
+        }
+        if (seconds > maxTimeConstant) {
+            seconds = maxTimeConstant;
+        }
+        timeConstant = seconds;
+    }
 
     void begin() {
         pinMode(pin, INPUT);
@@ -68,7 +92,8 @@ struct Thermometer {
             // long the pass took. At dt = 0 it is 0 / 0 while tau is still 0.
             float dt = (now - lastSample) / 1000.0f;
             if (dt > 0) {
-                tau = std::min(tau + dt, timeConstant);
+                sampledFor = std::min(sampledFor + dt, maxTimeConstant);
+                float tau = std::min(sampledFor, timeConstant);
                 millivolts += (median - millivolts) * dt / (tau + dt);
             }
         }

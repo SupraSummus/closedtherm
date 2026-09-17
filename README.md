@@ -25,6 +25,7 @@ Each parameter is named after the key it appears under in that JSON, except the 
 | `requested_dhw_on` | `on` or `off` |
 | `requested_ch_temp` | manual CH setpoint in degrees C, `0 < t < 100` |
 | `requested_dhw_temp` | hot water setpoint in degrees C, `0 < t < 100` |
+| `temp_sensor_tau` | time constant of the room sensor's low-pass, in seconds, `0 <= t <= 3600` — `0` switches it off |
 | `ch_temp_source` | which algorithm decides the CH setpoint: `manual` or `pi` |
 | `pi_target_temp` | room temperature the PI controller aims for, `5 <= t <= 35` |
 | `pi_kp` | proportional gain, `0 <= k <= 100` |
@@ -90,9 +91,14 @@ Each `loop()` pass takes one reading and the median of the last 16 goes on: a di
 
 The low-pass is against the temperature itself moving briefly: a draught, a door, someone standing next to the sensor.
 Those are real readings the median has no reason to drop, and the controller should not chase them.
-It is first order with a time constant of ten minutes, integrated over the `millis()` that actually elapsed, so like `pi_ki` it does not depend on how long one `loop()` takes.
-For its first ten minutes the time constant is the time since the first reading instead, which makes the filter the plain mean of every median so far.
-The first reading after a boot has been seen a dozen degrees off, and this way it counts for one pass rather than seeding the whole ten minutes.
+It is first order, integrated over the `millis()` that actually elapsed, so like `pi_ki` it does not depend on how long one `loop()` takes.
+Until sampling has been going as long as the time constant, the time it has been going is the constant instead, which makes the filter the plain mean of every median so far.
+The first reading after a boot has been seen a dozen degrees off, and this way it counts for one pass rather than seeding the whole constant.
+
+How briefly the room has to move to be worth ignoring is a property of the room, so the constant is a setting rather than a constant: `temp_sensor_tau`, in seconds, ten minutes by default.
+Since the warm-up above is how long sampling has been going and not the constant itself, a new setting is in force from the next pass, whether it is longer or shorter than the old one.
+`0` switches the low-pass off, which leaves `temp_sensor_mv` the plain median: one way to see what the low-pass is smoothing away.
+A value outside the band coming back from NVS is clamped into it, since a negative constant would leave the filter weight negative or unbounded rather than merely wrong.
 
 ## Tests
 

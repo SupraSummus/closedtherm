@@ -66,6 +66,13 @@ const float piIntegralSaveEpsilon = 1.0;
 const uint32_t piIntegralSaveInterval = 600000;  // 10 minutes
 const uint32_t piIntegralSaveJitter = 120000;    // give or take 2
 
+// The shortest the demand may stay in one state, which bounds the boiler to one
+// cycle per twice this however the crossing is being wandered over — sensor noise,
+// a gain that answers the room too hard, or the loop closing faster than the house
+// can. A time rather than a band of degrees: a band would bias where the room
+// settles, and this only limits how often the answer may change, not what it is.
+const uint32_t piDemandDwell = 600000;  // 10 minutes
+
 struct PISource {
     PIController control;
 
@@ -85,6 +92,7 @@ struct PISource {
     // is no answering that second question: tracking is what the integral is
     // doing while something else drives.
     bool heatDemand = false;
+    uint32_t lastDemandChange = 0;
 
     // What the integral was when it last went to NVS, and how long to wait before
     // it is worth writing again.
@@ -101,6 +109,9 @@ struct PISource {
         control.start(now);
         lastIntegralSave = now;
         jitterIntegralSave();
+        // A whole dwell ago, so the first pass after a boot answers the room it
+        // actually finds rather than sitting out ten minutes of it.
+        lastDemandChange = now - piDemandDwell;
     }
 
     void jitterIntegralSave() {
@@ -158,7 +169,14 @@ struct PISource {
     // unless this source is out.
     //
     // The demand is settled off the reading the controller is about to act on, so
-    // the state it goes into and the CH bit the sketch sends agree on the same pass.
+    // the state it goes into and the CH bit the sketch sends agree on the same pass,
+    // and it is the settled one — dwell and all — that picks the state, since
+    // holding has to mean the boiler really is off.
+    //
+    // The dwell costs the integral a little overshoot past the crossing, since
+    // drive() carries on for as long as the change is held back: ki * error * dwell,
+    // which at the gains above is about a degree. The floor is the bound that
+    // matters; the crossing was only ever the soft one.
     //
     // Turning the boiler off is what makes the controller's own floor load-bearing
     // rather than tidy: off is hold(), which does not integrate, so an integral
@@ -168,7 +186,11 @@ struct PISource {
     // whatever the integral was.
     void update(bool nowInCharge, bool allowed, float measured, float driven, uint32_t now) {
         inCharge = nowInCharge;
-        heatDemand = control.outputFor(measured) > measured;
+        bool wanted = control.outputFor(measured) > measured;
+        if (wanted != heatDemand && now - lastDemandChange >= piDemandDwell) {
+            heatDemand = wanted;
+            lastDemandChange = now;
+        }
         if (!inCharge) {
             control.track(measured, driven, now);
         } else if (allowed && heatDemand) {

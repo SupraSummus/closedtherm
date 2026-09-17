@@ -28,6 +28,39 @@ float medianOver(std::initializer_list<int> readings) {
     return t.median;
 }
 
+// A full window at 700 mV, then ten minutes in one pass, which is all the
+// warm-up any constant here asks for, then the median stepped to 600 with no
+// time gone by: a 100 mV step the low-pass has not answered yet.
+//
+// One thermometer's passes must not be interleaved with another's, since
+// `passes` moves the one clock they all read: a gap reaches the one left waiting
+// as a pass ten minutes long. Hence a helper per profile, taking a constant and
+// handing back a reading, rather than a test driving two thermometers at once.
+void aStepAfterWarmUp(Thermometer& t) {
+    passes(t, Thermometer::window, 700);
+    passes(t, 1, 700, 600000);
+    passes(t, Thermometer::window, 600, 0);
+}
+
+// How much of the 100 mV step the low-pass has followed a minute after it.
+float aMinutePastAStep(float timeConstant) {
+    Thermometer t(pin);
+    t.setTimeConstant(timeConstant);
+    aStepAfterWarmUp(t);
+    passes(t, 600, 600);  // a minute of the step, at 100 ms a pass
+    return 700 - t.millivolts;
+}
+
+// Where the low-pass reads a second after the constant was changed at the step.
+float aSecondAfterChanging(float before, float after) {
+    Thermometer t(pin);
+    t.setTimeConstant(before);
+    aStepAfterWarmUp(t);
+    t.setTimeConstant(after);
+    passes(t, 1, 600, 1000);
+    return t.millivolts;
+}
+
 }  // namespace
 
 TEST_CASE("a first pass is reported as it is, at 2 mV per degree, downwards as it warms") {
@@ -82,6 +115,31 @@ TEST_CASE("the low-pass follows a step of the median with a time constant of abo
     CHECK(t.millivolts > 699);  // ...the low-pass has barely started
     passes(t, 6000 - Thermometer::window, 600);  // ten minutes since the step, at 100 ms a pass
     CHECK(t.millivolts == doctest::Approx(700 - 100 * 0.632).epsilon(0.01));  // 1 - 1/e of the way
+}
+
+TEST_CASE("the time constant is a setting, and a shorter one follows a step sooner") {
+    // A minute of a minute's constant is one constant: 1 - 1/e of the step. A
+    // minute of ten minutes' is a tenth of one, and barely a tenth of the way.
+    CHECK(aMinutePastAStep(60) == doctest::Approx(100 * 0.632).epsilon(0.01));
+    CHECK(aMinutePastAStep(600) == doctest::Approx(100 * 0.095).epsilon(0.01));
+}
+
+TEST_CASE("a time constant of zero is the median, unfiltered") {
+    Thermometer t(pin);
+    t.setTimeConstant(0);
+    aStepAfterWarmUp(t);
+    CHECK(t.millivolts == 700);  // no time has gone by, so not even this one has moved
+    passes(t, 1, 600);           // and one pass with any time in it goes all the way
+    CHECK(t.millivolts == 600);
+}
+
+TEST_CASE("a constant changed mid-run is in force from the next pass") {
+    // The warm-up is how long sampling has been going, which is a fact about the
+    // past, so nothing has to catch up with a new setting: a second of a
+    // minute's constant is 1/61 of the step and a second of ten minutes' is
+    // 1/601, whichever constant the thermometer had been running with before.
+    CHECK(aSecondAfterChanging(600, 60) == doctest::Approx(700 - 100.0 / 61).epsilon(0.001));
+    CHECK(aSecondAfterChanging(60, 600) == doctest::Approx(700 - 100.0 / 601).epsilon(0.001));
 }
 
 TEST_CASE("the low-pass takes millis() wrapping past 32 bits as the second it was") {

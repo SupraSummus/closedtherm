@@ -200,6 +200,54 @@ TEST_CASE("loop() takes one thermometer pass off the ADC and / reports it") {
     CHECK(mv > 651);
 }
 
+// How the constant shapes the reading is test_thermometer.cpp's; here it is the
+// setting: /set takes it, NVS keeps it, / reports it, and the sensor runs with it.
+TEST_CASE("/set saves the sensor time constant under the key setup() reads") {
+    Booted b;
+    WebServer::Response response = server.get("/set", {{"temp_sensor_tau", "120"}});
+    CHECK(response.code == 200);
+    CHECK(thermometer.timeConstant == 120);
+    CHECK(preferences.floats.at("temp_sensor_tau") == 120);
+    // The same key /set takes and / reports, which is also the one in NVS above.
+    CHECK(parsed(response)["temp_sensor_tau"].as<float>() == 120);
+
+    thermometer.setTimeConstant(30);  // and a reboot picks the saved one back up
+    setup();
+    CHECK(thermometer.timeConstant == 120);
+}
+
+TEST_CASE("the time constant /set gives is the one the low-pass runs with") {
+    Booted b;
+    CHECK(server.get("/set", {{"temp_sensor_tau", "0"}}).code == 200);  // the low-pass off
+    fake::adc_mv = 701;
+    tick(true, 1000);
+    fake::adc_mv = 601;
+    tick(true, 2000);
+    // With no low-pass left, / reports the median of the two outright, where the
+    // ten-minute default has it still on its way there.
+    CHECK(status()["temp_sensor_mv"].as<float>() == 651);
+}
+
+TEST_CASE("/set rejects a time constant outside the band and changes nothing") {
+    Booted b;
+    for (const char* bad : {"-1", "3601", "abc", "nan", "inf", "60x", ""}) {
+        CAPTURE(bad);
+        CHECK(server.get("/set", {{"temp_sensor_tau", bad}}).code == 400);
+    }
+    CHECK(thermometer.timeConstant == Thermometer::defaultTimeConstant);
+    CHECK(preferences.floats.empty());
+    // Both ends are in, and 0 is the low-pass switched off rather than a typo.
+    CHECK(server.get("/set", {{"temp_sensor_tau", "0"}}).code == 200);
+    CHECK(server.get("/set", {{"temp_sensor_tau", "3600"}}).code == 200);
+}
+
+TEST_CASE("a stored time constant outside the band is clamped rather than run with") {
+    Booted b;
+    preferences.floats["temp_sensor_tau"] = -60;  // from a build with a different band
+    setup();
+    CHECK(thermometer.timeConstant == Thermometer::minTimeConstant);
+}
+
 TEST_CASE("pushSetpoints() writes to the boiler every 10 s, not on every loop() pass") {
     Booted b;
     setBoilerTemperature = 60;

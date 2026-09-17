@@ -21,6 +21,14 @@ OpenTherm ot(inPin, outPin);
 const int tempSensorPin = 35; // analog pin for temperature sensor
 Thermometer thermometer(tempSensorPin);
 
+// The sensor's one tunable, in seconds; what the number means and what it
+// accepts are thermometer.h's. The one string is the /set parameter, the NVS key
+// and the field / reports at once, and it sits exactly on the cap NVS puts on a
+// key, so the check keeps it there: one character more and Preferences would
+// write nothing and the setting would revert at the next reboot.
+const char tempTauName[] = "temp_sensor_tau";
+static_assert(sizeof(tempTauName) - 1 <= 15, "NVS caps a key at 15 characters");
+
 extern const char* ssid;
 extern const char* password;
 #include "creds.h"
@@ -146,6 +154,7 @@ void handleRoot() {
     doc["fault"] = readFault;
     doc["temp_sensor_mv"] = thermometer.millivolts;
     doc["temp_sensor_c"] = thermometer.celsius;
+    doc[tempTauName] = thermometer.timeConstant;
 
     doc["wifi_reconnects"] = wifi_reconnects;
     doc["boot_count"] = boot_count;
@@ -211,6 +220,13 @@ void handleSet() {
             if (!(parseFloat(value, &number) && number > 0.0 && number < 100.0)) {
                 error = "Invalid " + name + ", expected 0 < t < 100";
             }
+        } else if (name == tempTauName) {
+            if (!(parseFloat(value, &number) && number >= Thermometer::minTimeConstant &&
+                  number <= Thermometer::maxTimeConstant)) {
+                error = "Invalid " + name + ", expected " +
+                        String(Thermometer::minTimeConstant) + " to " +
+                        String(Thermometer::maxTimeConstant);
+            }
         } else if (name == "ch_temp_source") {
             ChTempSource source;
             if (!parseChTempSource(value, &source)) {
@@ -245,6 +261,10 @@ void handleSet() {
     if (server.hasArg("requested_dhw_temp")) {
         setDHWTemperature = server.arg("requested_dhw_temp").toFloat();
         savePreference("req_dhw_temp", setDHWTemperature);
+    }
+    if (server.hasArg(tempTauName)) {
+        thermometer.setTimeConstant(server.arg(tempTauName).toFloat());  // checked above
+        savePreference(tempTauName, thermometer.timeConstant);
     }
     if (server.hasArg("ch_temp_source")) {
         parseChTempSource(server.arg("ch_temp_source"), &setChTempSource);  // checked above
@@ -288,6 +308,7 @@ void setup()
     setHotWaterOn = preferences.getBool("dhw_on", setHotWaterOn);
     setBoilerTemperature = preferences.getFloat("req_ch_temp", setBoilerTemperature);
     setDHWTemperature = preferences.getFloat("req_dhw_temp", setDHWTemperature);
+    thermometer.setTimeConstant(preferences.getFloat(tempTauName, thermometer.timeConstant));
     // A number no longer on the list means NVS holds a source this build does not
     // have, after a downgrade or a renumbering; fall back instead of indexing past
     // the names.
